@@ -89,54 +89,6 @@ def get_vendor(mac: str) -> str:
             
     return None
 
-def extract_serial_numbers(pkt_str, mac, ip=None, debug=False):
-    """
-    Extract potential serial numbers from packet payload.
-    
-    Args:
-        pkt_str: String representation of the packet
-        mac: MAC address associated with the packet
-        ip: IP address associated with the packet (optional)
-        debug: Enable debug output
-        
-    Returns:
-        List of potential serial numbers
-    """
-    # Common serial number patterns
-    patterns = [
-        # Look for context keywords followed by numbers
-        r'(?:serial|s/?n|serialnumber|serialnum|serial number|device id|asset|product)[^\w\r\n]{0,10}([A-Z0-9][A-Z0-9-]{5,20})',
-        # Look for formatted serial numbers (common patterns)
-        r'\b([A-Z0-9]{2,4}[-][A-Z0-9]{4,8}[-][A-Z0-9]{4,8})\b',  # Format: XX-XXXX-XXXX
-        r'\b([A-Z0-9]{4,8}[-][A-Z0-9]{4,8})\b',                  # Format: XXXX-XXXX
-        # Common formats without context
-        r'\b([A-Z]{2,3}[0-9]{5,10})\b',                           # Format: XX12345
-        r'\b([0-9]{5,8}[A-Z]{1,3})\b',                            # Format: 12345XX
-        # Baxter-specific patterns (if targeting medical devices)
-        r'\b(9[0-9]{5})\b',                                       # Baxter 6-digit format starting with 9
-        # Additional medical device patterns
-        r'\b(MD[0-9]{4,8})\b',                                    # Medical device format
-        r'\b(SN-[A-Z0-9]{6,12})\b',                               # SN-prefixed format
-    ]
-    
-    serials = []
-    
-    # Apply each pattern
-    for pattern in patterns:
-        matches = re.finditer(pattern, pkt_str, re.IGNORECASE)
-        for match in matches:
-            serial = match.group(1).strip()
-            # Basic validation - ensure it's not just a number, date, or common false positive
-            if (len(serial) >= 5 and 
-                not re.match(r'^[0-9]{1,3}$', serial) and
-                not re.match(r'^(19|20)\d{2}[01]\d[0-3]\d$', serial) and  # Exclude dates
-                not re.match(r'^(0|255|127)\.\d{1,3}\.\d{1,3}\.\d{1,3}$', serial)):  # Exclude IPs
-                if debug:
-                    print(f"[DEBUG] Found potential S/N: {serial} (MAC: {mac}, IP: {ip})")
-                serials.append(serial)
-    
-    return serials
-
 def extract_device_info(pcap_file, debug=False):
     """
     Extracts device information from all packets in the provided pcap file, aggregating by MAC addresses.
@@ -157,8 +109,6 @@ def extract_device_info(pcap_file, debug=False):
         'packet_count': 0,
         'first_seen': None,
         'last_seen': None,
-        'message_types': Counter(),
-        'serial_numbers': set(),
         'ip_connections': defaultdict(lambda: {
             'tcp_ports': set(),
             'udp_ports': set(),
@@ -167,8 +117,6 @@ def extract_device_info(pcap_file, debug=False):
             'last_seen': None
         })
     })
-
-    message_type_pattern = re.compile(r'(Status|Alarm|Alert|Config|Data|Command|Response)', re.IGNORECASE)
 
     for pkt in capture:
         try:
@@ -180,14 +128,6 @@ def extract_device_info(pcap_file, debug=False):
             dst_ip = pkt.ip.dst if hasattr(pkt, 'ip') else None
             src_mac = pkt.eth.src if hasattr(pkt, 'eth') else None
             dst_mac = pkt.eth.dst if hasattr(pkt, 'eth') else None
-
-            # Look for serial numbers in the packet
-            serials = extract_serial_numbers(pkt_str, src_mac, src_ip, debug)
-            for serial in serials:
-                if src_mac:
-                    device_info[src_mac]['serial_numbers'].add(serial)
-                if dst_mac:
-                    device_info[dst_mac]['serial_numbers'].add(serial)
 
             # Process both source and destination MAC addresses
             for mac in [src_mac, dst_mac]:
@@ -237,25 +177,12 @@ def extract_device_info(pcap_file, debug=False):
                     record['first_seen'] = pkt_time
                 record['last_seen'] = pkt_time
 
-            # Extract message types from the entire packet
-            msg_match = message_type_pattern.search(pkt_str)
-            if msg_match:
-                msg_type = msg_match.group(0)
-                # Record per device (choose first MAC if available)
-                if src_mac and src_mac in device_info:
-                    device_info[src_mac]['message_types'][msg_type] += 1
         except Exception as e:
             if debug:
                 print(f"[DEBUG] Exception encountered in packet processing: {e}")
             continue
 
     capture.close()
-    
-    # Convert message_types Counter to dict for JSON serialization
-    for mac, info in device_info.items():
-        info['message_types'] = dict(info['message_types'])
-        info['serial_numbers'] = list(info['serial_numbers'])
-
     return device_info
 
 def download_oui_instructions():
@@ -271,16 +198,25 @@ def write_csv_report(device_info, output_csv):
     try:
         with open(output_csv, "w", newline="") as csv_file:
             writer = csv.writer(csv_file)
-            writer.writerow(["MAC Address", "Vendor", "IP Address", "TCP Ports", "UDP Ports", "First Seen", "Last Seen", "Packet Count"])
+            writer.writerow([
+                "MAC Address", 
+                "Vendor", 
+                "IP Address", 
+                "TCP Ports", 
+                "UDP Ports", 
+                "First Seen", 
+                "Last Seen", 
+                "Packet Count"
+            ])
             
             # Generate one row per MAC-IP-service combination
             for mac, info in device_info.items():
                 vendor = info.get("vendor") or "Unknown"
                 
                 # For each IP address associated with this MAC
-                for ip, ip_info in info.get('ip_connections', {}).items():
-                    tcp_ports = sorted(ip_info.get('tcp_ports', []))
-                    udp_ports = sorted(ip_info.get('udp_ports', []))
+                for ip, ip_info in info.get("ip_connections", {}).items():
+                    tcp_ports = sorted(ip_info.get("tcp_ports", []))
+                    udp_ports = sorted(ip_info.get("udp_ports", []))
                     
                     # Format TCP and UDP ports as comma-separated lists
                     tcp_ports_str = ",".join(map(str, tcp_ports)) if tcp_ports else ""
@@ -308,96 +244,11 @@ def write_csv_report(device_info, output_csv):
         print(f"\n[!] Error writing CSV file: {e}")
         return False
 
-def extract_baxter_serials(pcap_file):
-    """Extract potential Baxter serial numbers (format: 9XXXXX)"""
-    capture = pyshark.FileCapture(pcap_file)
-    results = []
-    
-    for pkt in capture:
-        try:
-            pkt_str = str(pkt)
-            # Find all 6-digit numbers starting with 9
-            matches = re.finditer(r'\b(9[0-9]{5})\b', pkt_str)
-            
-            for match in matches:
-                potential_sn = match.group(1)
-                # Get some context (20 chars before and after)
-                start_pos = max(0, match.start() - 20)
-                end_pos = min(len(pkt_str), match.end() + 20)
-                context = pkt_str[start_pos:end_pos]
-                
-                # Get source/destination info
-                src_ip = pkt.ip.src if hasattr(pkt, 'ip') else "N/A"
-                dst_ip = pkt.ip.dst if hasattr(pkt, 'ip') else "N/A"
-                protocol = pkt.highest_layer
-                
-                results.append({
-                    'serial': potential_sn,
-                    'context': context,
-                    'src_ip': src_ip,
-                    'dst_ip': dst_ip,
-                    'protocol': protocol,
-                    'frame_num': pkt.number
-                })
-                
-        except Exception as e:
-            continue
-            
-    return results
-
-def analyze_baxter_serials_command(pcap_file):
-    """
-    Command to specifically analyze and display potential Baxter serial numbers with context.
-    This function is designed to be called directly from the command line.
-    """
-    print(f"\n[+] Analyzing {pcap_file} for potential Baxter serial numbers (format: 9XXXXX)")
-    results = extract_baxter_serials(pcap_file)
-    
-    if not results:
-        print("[-] No potential Baxter serial numbers found.")
-        return
-    
-    print(f"[+] Found {len(results)} potential matches:")
-    
-    # Group by serial number
-    by_serial = defaultdict(list)
-    for result in results:
-        by_serial[result['serial']].append(result)
-    
-    # Display results grouped by serial number
-    for serial, occurrences in by_serial.items():
-        print(f"\n[+] Potential Serial Number: {serial} (found in {len(occurrences)} packets)")
-        
-        # Show the first few occurrences with context
-        for i, occurrence in enumerate(occurrences[:3]):  # Limit to first 3 for readability
-            print(f"  Packet #{occurrence['frame_num']} ({occurrence['protocol']})")
-            print(f"  {occurrence['src_ip']} → {occurrence['dst_ip']}")
-            
-            # Check if this looks like a timestamp
-            is_timestamp = False
-            if "Date:" in occurrence['context'] or "time" in occurrence['context'].lower():
-                is_timestamp = True
-                print(f"  WARNING: This appears to be a timestamp, not a serial number")
-            
-            # Clean up and display the context
-            context = occurrence['context'].replace('\n', ' ').replace('\r', ' ')
-            # Highlight the serial number in the context
-            highlighted = context.replace(serial, f"[{serial}]")
-            print(f"  Context: ...{highlighted}...")
-            print()
-        
-        if len(occurrences) > 3:
-            print(f"  ... and {len(occurrences) - 3} more occurrences")
-    
-    return by_serial
-
 def main():
     parser = argparse.ArgumentParser(description="PCAP Asset Discovery - CSV Report focusing on MAC addresses")
     parser.add_argument("pcap_file", help="Path to the pcap file", nargs='?')
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     parser.add_argument("--download-instructions", action="store_true", help="Show instructions for downloading the OUI database")
-    parser.add_argument("--serial-only", action="store_true", help="Only show devices with detected serial numbers")
-    parser.add_argument("--analyze-baxter", action="store_true", help="Analyze potential Baxter serial numbers (format: 9XXXXX)")
     parser.add_argument("--output", help="Output CSV file path (default: <pcap_name>-device_info.csv)")
     args = parser.parse_args()
 
@@ -419,42 +270,14 @@ def main():
         print(f"[-] File not found: {args.pcap_file}")
         return
 
-    # Special mode for analyzing Baxter serial numbers
-    if args.analyze_baxter:
-        analyze_baxter_serials_command(args.pcap_file)
-        return
-
     device_info = extract_device_info(args.pcap_file, debug=args.debug)
 
     if device_info:
         print(f"\n[+] Devices Found: {len(device_info)}")
-        devices_with_serials = 0
-        serials_found = set()
         
         for mac, info in device_info.items():
             vendor = info.get('vendor') or "Unknown"
-            serial_numbers = info.get('serial_numbers', [])
-            
-            # Skip devices without serial numbers if --serial-only is specified
-            if args.serial_only and not serial_numbers:
-                continue
-            
-            devices_with_serials += 1 if serial_numbers else 0
-            for sn in serial_numbers:
-                serials_found.add(sn)
-            
-            if serial_numbers:
-                print(f" - MAC: {mac} (Vendor: {vendor}, S/N: {', '.join(serial_numbers)})")
-            else:
-                print(f" - MAC: {mac} (Vendor: {vendor})")
-        
-        # Print summary of serial numbers found
-        if serials_found:
-            print(f"\n[+] Serial Numbers Found: {len(serials_found)}")
-            for sn in sorted(serials_found):
-                print(f" - {sn}")
-        elif args.serial_only:
-            print("\n[-] No serial numbers found.")
+            print(f" - MAC: {mac} (Vendor: {vendor})")
     else:
         print("\n[-] No devices found.")
 
