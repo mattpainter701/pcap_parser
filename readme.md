@@ -18,7 +18,7 @@ This Python script parses PCAP files to discover network devices, identify vendo
 ## Installation
 ```bash
 # Clone the repository
-git clone [https://github.com/yourusername/pcap-parser.git](https://github.com/mattpainter701/pcap_parser.git)
+git clone https://github.com/mattpainter701/pcap_parser.git
 cd pcap-parser
 
 # Install dependencies
