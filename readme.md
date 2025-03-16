@@ -9,8 +9,7 @@ This Python script parses PCAP files to discover network devices, identify vendo
 - Tracks TCP and UDP ports for each IP address
 - Identifies message types in packet data
 - Generates detailed CSV reports with device information
-- Works with PyShark (built on top of TShark)
-
+  
 ## Requirements
 - Python 3.x
 - PyShark library
@@ -36,26 +35,6 @@ python pcap_parser.py --download-instructions
 python pcap_parser.py path/to/capture.pcap
 ```
 
-### Advanced Options
-```bash
-# Enable debug logging
-python pcap_parser.py path/to/capture.pcap --debug
-
-# Specify a custom output file
-python pcap_parser.py path/to/capture.pcap --output custom_output.csv
-```
-
-### Example
-```bash
-# Analyze a PCAP file and save the report to a specific location
-python pcap_parser.py pcaps/network_capture.pcap --output network_devices.csv
-```
-
-## Command Line Arguments
-- `pcap_file`: Path to the pcap file (required)
-- `--debug`: Enable debug logging
-- `--download-instructions`: Show instructions for downloading the OUI database
-- `--output`: Output CSV file path (default: <pcap_name>-device_info.csv)
 
 ## CSV Report Format
 The generated CSV report includes:
@@ -74,5 +53,3 @@ The generated CSV report includes:
 3. For each MAC address, it tracks associated IP addresses and ports
 4. The script generates a CSV report with one row per MAC-IP combination, with TCP and UDP ports in separate columns
 
-## License
-This project is licensed under the MIT License - see the LICENSE file for details.
