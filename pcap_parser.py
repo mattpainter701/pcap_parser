@@ -1,15 +1,14 @@
-#!/usr/bin/env python3
-
+import sys
+from collections import defaultdict
 import pyshark
-import re
 import argparse
-import os
 import csv
-from collections import defaultdict, Counter, namedtuple
+import os
+import re
 
-# Path for the OUI database file
-OUI_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "oui.txt")
-OUI_CSV_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "oui.csv")
+OUI_FILE = "oui.txt"
+OUI_CSV_FILE = "oui.csv"
+OUTPUT_DIR = "outputs"
 
 def parse_oui_file():
     """
@@ -89,19 +88,54 @@ def get_vendor(mac: str) -> str:
             
     return None
 
+def is_valid_mac(mac: str) -> bool:
+    """Check if MAC address is valid and not broadcast/multicast."""
+    if not mac:
+        return False
+        
+    # Filter out broadcast/multicast addresses
+    if mac.lower() in ("ff:ff:ff:ff:ff:ff", "00:00:00:00:00:00"):
+        return False
+        
+    # Filter out multicast addresses (first byte's LSB is 1)
+    try:
+        first_byte = int(mac.split(":")[0], 16)
+        if first_byte & 0x01:
+            return False
+    except (ValueError, IndexError):
+        return False
+        
+    return True
+
+def check_tshark_installation():
+    """Check if TShark is installed and accessible."""
+    try:
+        from pyshark.tshark.tshark import get_process_path
+        try:
+            get_process_path()
+            return True
+        except Exception:
+            print("\n[!] TShark not found. Please install Wireshark/tshark to use this tool.")
+            print("[!] You can download it from: https://www.wireshark.org/download.html")
+            print("[!] Make sure to add tshark to your system PATH during installation.")
+            return False
+    except ImportError:
+        print("\n[!] pyshark not installed. Please install it with:")
+        print("    pip install pyshark")
+        return False
+
 def extract_device_info(pcap_file, debug=False):
     """
     Extracts device information from all packets in the provided pcap file, aggregating by MAC addresses.
-
-    Args:
-        pcap_file (str): Path to the pcap file.
-        debug (bool): Enable debug logging.
-
-    Returns:
-        dict: device_info mapping MAC addresses to device information
     """
     print(f"\n[+] Loading capture file: {pcap_file}")
-    capture = pyshark.FileCapture(pcap_file)
+    
+    try:
+        capture = pyshark.FileCapture(pcap_file)
+    except Exception as e:
+        print(f"[!] Error opening capture file: {e}")
+        print("[!] Make sure the file exists and is a valid PCAP file")
+        return None
 
     # Track device information keyed by MAC address
     device_info = defaultdict(lambda: {
@@ -118,71 +152,107 @@ def extract_device_info(pcap_file, debug=False):
         })
     })
 
-    for pkt in capture:
-        try:
-            pkt_str = str(pkt)
-            pkt_time = float(pkt.sniff_time.timestamp()) if hasattr(pkt, 'sniff_time') else 0
+    packet_count = 0
+    processed_count = 0
+    
+    try:
+        for pkt in capture:
+            packet_count += 1
+            try:
+                pkt_time = float(pkt.sniff_time.timestamp()) if hasattr(pkt, 'sniff_time') else 0
 
-            # Extract IP and MAC addresses
-            src_ip = pkt.ip.src if hasattr(pkt, 'ip') else None
-            dst_ip = pkt.ip.dst if hasattr(pkt, 'ip') else None
-            src_mac = pkt.eth.src if hasattr(pkt, 'eth') else None
-            dst_mac = pkt.eth.dst if hasattr(pkt, 'eth') else None
-
-            # Process both source and destination MAC addresses
-            for mac in [src_mac, dst_mac]:
-                if not mac:
-                    continue
-                record = device_info[mac]
+                # Extract IP and MAC addresses
+                src_ip = pkt.ip.src if hasattr(pkt, 'ip') else None
+                dst_ip = pkt.ip.dst if hasattr(pkt, 'ip') else None
+                src_mac = pkt.eth.src if hasattr(pkt, 'eth') else None
+                dst_mac = pkt.eth.dst if hasattr(pkt, 'eth') else None
                 
-                # Track IP connections for this MAC
-                for ip in [src_ip, dst_ip]:
-                    if not ip:
-                        continue
-                    ip_record = record['ip_connections'][ip]
-                    if ip_record['first_seen'] is None:
-                        ip_record['first_seen'] = pkt_time
-                    ip_record['last_seen'] = pkt_time
-                    ip_record['packet_count'] += 1
-
-                if record['vendor'] is None:
-                    record['vendor'] = get_vendor(mac)
-
+                # Check for TCP/UDP ports
+                src_port = None
+                dst_port = None
+                proto = None
+                
                 if hasattr(pkt, 'tcp'):
-                    try:
-                        tcp_src = pkt.tcp.srcport if hasattr(pkt.tcp, 'srcport') else None
-                        tcp_dst = pkt.tcp.dstport if hasattr(pkt.tcp, 'dstport') else None
-                        # Associate ports with specific IP connections
-                        if src_ip and tcp_src and mac == src_mac:
-                            record['ip_connections'][src_ip]['tcp_ports'].add(tcp_src)
-                        if dst_ip and tcp_dst and mac == dst_mac:
-                            record['ip_connections'][dst_ip]['tcp_ports'].add(tcp_dst)
-                    except Exception:
-                        pass
+                    src_port = int(pkt.tcp.srcport)
+                    dst_port = int(pkt.tcp.dstport)
+                    proto = 'tcp'
+                elif hasattr(pkt, 'udp'):
+                    src_port = int(pkt.udp.srcport)
+                    dst_port = int(pkt.udp.dstport)
+                    proto = 'udp'
 
-                if hasattr(pkt, 'udp'):
-                    try:
-                        udp_src = pkt.udp.srcport if hasattr(pkt.udp, 'srcport') else None
-                        udp_dst = pkt.udp.dstport if hasattr(pkt.udp, 'dstport') else None
-                        # Associate ports with specific IP connections
-                        if src_ip and udp_src and mac == src_mac:
-                            record['ip_connections'][src_ip]['udp_ports'].add(udp_src)
-                        if dst_ip and udp_dst and mac == dst_mac:
-                            record['ip_connections'][dst_ip]['udp_ports'].add(udp_dst)
-                    except Exception:
-                        pass
-
-                record['packet_count'] += 1
-                if record['first_seen'] is None:
-                    record['first_seen'] = pkt_time
-                record['last_seen'] = pkt_time
-
-        except Exception as e:
-            if debug:
-                print(f"[DEBUG] Exception encountered in packet processing: {e}")
-            continue
-
-    capture.close()
+                # Filter out invalid MAC addresses
+                if not src_mac or not dst_mac:
+                    continue
+                
+                if not is_valid_mac(src_mac) or not is_valid_mac(dst_mac):
+                    continue
+                
+                # Process source MAC address
+                if src_mac:
+                    record = device_info[src_mac]
+                    if record['vendor'] is None:
+                        record['vendor'] = get_vendor(src_mac)
+                    
+                    if record['first_seen'] is None:
+                        record['first_seen'] = pkt_time
+                    record['last_seen'] = pkt_time
+                    record['packet_count'] += 1
+                    
+                    # If we have source IP and it's communicating with a destination
+                    if src_ip and dst_ip:
+                        ip_record = record['ip_connections'][src_ip]
+                        if ip_record['first_seen'] is None:
+                            ip_record['first_seen'] = pkt_time
+                        ip_record['last_seen'] = pkt_time
+                        ip_record['packet_count'] += 1
+                        
+                        # If we have port information, record it
+                        if proto == 'tcp' and src_port:
+                            ip_record['tcp_ports'].add(src_port)
+                        elif proto == 'udp' and src_port:
+                            ip_record['udp_ports'].add(src_port)
+                
+                # Process destination MAC address similarly
+                if dst_mac:
+                    record = device_info[dst_mac]
+                    if record['vendor'] is None:
+                        record['vendor'] = get_vendor(dst_mac)
+                    
+                    if record['first_seen'] is None:
+                        record['first_seen'] = pkt_time
+                    record['last_seen'] = pkt_time
+                    record['packet_count'] += 1
+                    
+                    # If we have destination IP and it's communicating with a source
+                    if dst_ip and src_ip:
+                        ip_record = record['ip_connections'][dst_ip]
+                        if ip_record['first_seen'] is None:
+                            ip_record['first_seen'] = pkt_time
+                        ip_record['last_seen'] = pkt_time
+                        ip_record['packet_count'] += 1
+                        
+                        # If we have port information, record it
+                        if proto == 'tcp' and dst_port:
+                            ip_record['tcp_ports'].add(dst_port)
+                        elif proto == 'udp' and dst_port:
+                            ip_record['udp_ports'].add(dst_port)
+                
+                processed_count += 1
+                
+            except Exception as e:
+                if debug:
+                    print(f"[DEBUG] Exception encountered in packet {packet_count}: {e}")
+                continue
+                
+    except KeyboardInterrupt:
+        print("\n[!] Processing interrupted by user")
+    except Exception as e:
+        print(f"[!] Error processing packets: {e}")
+    finally:
+        capture.close()
+        
+    print(f"[+] Processed {processed_count} of {packet_count} packets")
     return device_info
 
 def download_oui_instructions():
@@ -196,7 +266,12 @@ def download_oui_instructions():
 def write_csv_report(device_info, output_csv):
     """Write device information to a CSV file."""
     try:
-        with open(output_csv, "w", newline="") as csv_file:
+        # Create outputs directory if it doesn't exist
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        
+        output_path = os.path.join(OUTPUT_DIR, output_csv)
+        
+        with open(output_path, "w", newline="") as csv_file:
             writer = csv.writer(csv_file)
             writer.writerow([
                 "MAC Address", 
@@ -234,10 +309,10 @@ def write_csv_report(device_info, output_csv):
                         ip_info.get("packet_count", 0)
                     ])
         
-        print(f"\n[+] CSV report generated: {output_csv}")
+        print(f"\n[+] CSV report generated: {output_path}")
         return True
     except PermissionError:
-        print(f"\n[!] Permission denied when writing to {output_csv}")
+        print(f"\n[!] Permission denied when writing to {output_path}")
         print(f"[!] Try specifying a different output file with --output")
         return False
     except Exception as e:
@@ -245,6 +320,10 @@ def write_csv_report(device_info, output_csv):
         return False
 
 def main():
+    # Check dependencies before proceeding
+    if not check_tshark_installation():
+        sys.exit(1)
+        
     parser = argparse.ArgumentParser(description="PCAP Asset Discovery - CSV Report focusing on MAC addresses")
     parser.add_argument("pcap_file", help="Path to the pcap file", nargs='?')
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
