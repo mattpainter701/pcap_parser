@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+
+{% block title %}PCAP Network Visualizer - Home{% endblock %}
+
+{% block content %}
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <!-- Left panel: File list -->
+    <div class="lg:col-span-2 bg-white rounded-lg shadow-md p-6">
+        <div class="flex justify-between items-center mb-6">
+            <h2 class="text-2xl font-bold text-gray-800"><i class="fas fa-file-csv mr-2 text-primary"></i> PCAP CSV Files</h2>
+            <div class="text-sm text-gray-500">{{ csv_files|length }} files found</div>
+        </div>
+
+        {% if csv_files %}
+        <div class="overflow-x-auto">
+            <table class="min-w-full bg-white rounded-lg">
+                <thead class="bg-gray-100">
+                    <tr>
+                        <th class="py-3 px-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Filename</th>
+                        <th class="py-3 px-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
+                        <th class="py-3 px-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-200">
+                    {% for file in csv_files %}
+                    <tr class="hover:bg-gray-50 transition-colors">
+                        <td class="py-4 px-4 whitespace-nowrap">
+                            <div class="flex items-center">
+                                <i class="fas fa-file-csv text-primary mr-3"></i>
+                                <span class="font-medium text-gray-900">{{ file.name }}</span>
+                            </div>
+                        </td>
+                        <td class="py-4 px-4 whitespace-nowrap text-sm text-gray-500">
+                            {{ file.date|timestamp_to_datetime }}
+                        </td>
+                        <td class="py-4 px-4 whitespace-nowrap text-sm">
+                            <a href="{{ url_for('visualize', filename=file.name) }}" class="bg-primary hover:bg-opacity-90 text-white py-2 px-4 rounded-md inline-flex items-center transition-colors">
+                                <i class="fas fa-network-wired mr-2"></i> Visualize
+                            </a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="text-center py-10">
+            <i class="fas fa-folder-open text-gray-300 text-5xl mb-4"></i>
+            <p class="text-gray-500">No PCAP CSV files found. Upload a file to get started.</p>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Right panel: Upload and Info -->
+    <div class="lg:col-span-1">
+        <!-- Upload panel -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <h3 class="text-xl font-bold text-gray-800 mb-4"><i class="fas fa-upload mr-2 text-primary"></i> Upload CSV</h3>
+            <p class="text-gray-600 mb-4">Upload a new PCAP CSV file for visualization.</p>
+            
+            <form action="{{ url_for('upload_file') }}" method="post" enctype="multipart/form-data" class="space-y-4">
+                <div class="relative border-2 border-dashed border-gray-300 rounded-lg p-6 hover:border-primary transition-colors">
+                    <input type="file" name="file" id="file" accept=".csv" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10">
+                    <div class="text-center">
+                        <i class="fas fa-file-upload text-gray-400 text-3xl mb-2"></i>
+                        <p class="text-sm text-gray-500">Click to browse or drag and drop</p>
+                        <p class="text-xs text-gray-400 mt-1">Only CSV files are supported</p>
+                    </div>
+                </div>
+                <button type="submit" class="w-full bg-primary hover:bg-opacity-90 text-white py-2 px-4 rounded-md inline-flex items-center justify-center transition-colors">
+                    <i class="fas fa-upload mr-2"></i> Upload and Visualize
+                </button>
+            </form>
+        </div>
+        
+        <!-- Info panel -->
+        <div class="bg-white rounded-lg shadow-md p-6">
+            <h3 class="text-xl font-bold text-gray-800 mb-4"><i class="fas fa-info-circle mr-2 text-primary"></i> About</h3>
+            <div class="text-gray-600 space-y-3">
+                <p>This tool visualizes network activity captured in PCAP files and processed into CSV format.</p>
+                <p>The visualization shows relationships between MAC addresses and IP addresses with port information.</p>
+                <div class="mt-4 pt-4 border-t border-gray-200">
+                    <h4 class="font-medium text-gray-800 mb-2">Features:</h4>
+                    <ul class="list-disc pl-5 space-y-1 text-sm">
+                        <li>Interactive network graph visualization</li>
+                        <li>Drag-and-drop node positioning</li>
+                        <li>Zoom and pan controls</li>
+                        <li>Node filtering and search</li>
+                        <li>Hover for detailed information</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Add a simple file name display when a file is selected
+    document.getElementById('file').addEventListener('change', function(e) {
+        if (this.files && this.files[0]) {
+            let filename = this.files[0].name;
+            let container = this.parentElement;
+            let fileLabel = container.querySelector('p.text-sm');
+            fileLabel.textContent = filename;
+            container.classList.add('border-primary');
+        }
+    });
+</script>
+{% endblock %} 

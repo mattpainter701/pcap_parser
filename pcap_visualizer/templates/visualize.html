@@ -1,0 +1,470 @@
+{% extends "base.html" %}
+
+{% block title %}Network Visualization - {{ filename }}{% endblock %}
+
+{% block head %}
+<!-- Include Vis.js for network visualization -->
+<link rel="stylesheet" href="https://unpkg.com/vis-network@9.1.2/dist/dist/vis-network.min.css">
+<style>
+    #network-container {
+        width: 100%;
+        height: 600px;
+        border: 1px solid #ddd;
+        background-color: #f8fafc;
+        border-radius: 0.5rem;
+    }
+    
+    .control-panel {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        background: white;
+        border-radius: 8px;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        padding: 12px;
+        z-index: 10;
+        width: 250px;
+    }
+    
+    .node-tooltip {
+        background-color: white;
+        padding: 8px;
+        border-radius: 4px;
+        box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+        font-size: 12px;
+    }
+    
+    .legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 10px;
+    }
+    
+    .legend-item {
+        display: flex;
+        align-items: center;
+        font-size: 12px;
+    }
+    
+    .legend-color {
+        width: 12px;
+        height: 12px;
+        margin-right: 5px;
+        border-radius: 2px;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="mb-4 flex justify-between items-center">
+    <div>
+        <h2 class="text-2xl font-bold text-gray-800">
+            <i class="fas fa-project-diagram mr-2 text-primary"></i> 
+            Network Visualization: {{ filename }}
+        </h2>
+        <p class="text-gray-600 mt-1">Visualizing network connections between MAC addresses and IP addresses</p>
+    </div>
+    <a href="{{ url_for('index') }}" class="bg-gray-200 hover:bg-gray-300 text-gray-800 py-2 px-4 rounded-md inline-flex items-center transition-colors">
+        <i class="fas fa-arrow-left mr-2"></i> Back to Files
+    </a>
+</div>
+
+<div class="bg-white rounded-lg shadow-md p-4 mb-6">
+    <div class="flex flex-wrap gap-4 mb-4">
+        <!-- Search box -->
+        <div class="flex-grow max-w-md">
+            <div class="relative">
+                <input type="text" id="search-input" class="w-full pl-10 pr-4 py-2 rounded-md border border-gray-300 focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent" placeholder="Search nodes...">
+                <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                    <i class="fas fa-search text-gray-400"></i>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Filter buttons -->
+        <div class="flex space-x-2">
+            <button id="filter-all" class="bg-primary text-white py-2 px-4 rounded-md hover:bg-opacity-90 transition-colors">
+                <i class="fas fa-globe-americas mr-1"></i> All
+            </button>
+            <button id="filter-mac" class="bg-gray-200 text-gray-800 py-2 px-4 rounded-md hover:bg-gray-300 transition-colors">
+                <i class="fas fa-network-wired mr-1"></i> MAC
+            </button>
+            <button id="filter-ip" class="bg-gray-200 text-gray-800 py-2 px-4 rounded-md hover:bg-gray-300 transition-colors">
+                <i class="fas fa-sitemap mr-1"></i> IP
+            </button>
+        </div>
+    </div>
+    
+    <div class="flex flex-wrap gap-4">
+        <!-- Layout controls -->
+        <div class="flex space-x-2">
+            <button id="layout-hierarchical" class="bg-gray-200 text-gray-800 py-2 px-4 rounded-md hover:bg-gray-300 transition-colors">
+                <i class="fas fa-sitemap mr-1"></i> Hierarchical
+            </button>
+            <button id="layout-physics" class="bg-gray-200 text-gray-800 py-2 px-4 rounded-md hover:bg-gray-300 transition-colors">
+                <i class="fas fa-atom mr-1"></i> Force Directed
+            </button>
+        </div>
+        
+        <!-- Action buttons -->
+        <div class="flex space-x-2 ml-auto">
+            <button id="btn-fullscreen" class="bg-gray-200 text-gray-800 py-2 px-4 rounded-md hover:bg-gray-300 transition-colors">
+                <i class="fas fa-expand mr-1"></i> Fullscreen
+            </button>
+            <button id="btn-export" class="bg-gray-200 text-gray-800 py-2 px-4 rounded-md hover:bg-gray-300 transition-colors">
+                <i class="fas fa-download mr-1"></i> Export
+            </button>
+        </div>
+    </div>
+</div>
+
+<div class="bg-white rounded-lg shadow-md p-4">
+    <div class="relative">
+        <!-- Network visualization container -->
+        <div id="network-container"></div>
+        
+        <!-- Legend -->
+        <div class="mt-4 px-2">
+            <h3 class="font-medium text-gray-700 mb-2">Legend:</h3>
+            <div class="legend">
+                <div class="legend-item">
+                    <div class="legend-color" style="background-color: #4f46e5;"></div>
+                    <span>MAC Address</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background-color: #10b981;"></div>
+                    <span>IP Address</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background-color: #000; height: 2px;"></div>
+                    <span>Connection with Ports</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://unpkg.com/vis-network@9.1.2/dist/dist/vis-network.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const container = document.getElementById('network-container');
+        let network = null;
+        let allNodes = [];
+        let allEdges = [];
+        
+        // Define different node groups with distinctive styles
+        const groups = {
+            mac: {
+                color: {
+                    background: '#4f46e5',
+                    border: '#3730a3',
+                    highlight: {
+                        background: '#818cf8',
+                        border: '#4f46e5'
+                    }
+                },
+                font: {
+                    color: '#ffffff'
+                },
+                borderWidth: 2,
+                shape: 'box'
+            },
+            ip: {
+                color: {
+                    background: '#10b981',
+                    border: '#047857',
+                    highlight: {
+                        background: '#34d399',
+                        border: '#10b981'
+                    }
+                },
+                font: {
+                    color: '#ffffff'
+                },
+                borderWidth: 2,
+                shape: 'dot'
+            }
+        };
+        
+        // Edge styling
+        const edgesOptions = {
+            color: {
+                color: '#64748b',
+                highlight: '#334155',
+                hover: '#334155'
+            },
+            font: {
+                align: 'middle',
+                size: 10
+            },
+            selectionWidth: 2,
+            smooth: {
+                type: 'continuous',
+                roundness: 0.2
+            }
+        };
+        
+        // Network visualization options
+        const options = {
+            nodes: {
+                font: {
+                    size: 12,
+                    face: 'Roboto'
+                },
+                margin: 10,
+                shape: 'box'
+            },
+            edges: edgesOptions,
+            groups: groups,
+            physics: {
+                enabled: true,
+                barnesHut: {
+                    gravitationalConstant: -2000,
+                    centralGravity: 0.1,
+                    springLength: 150,
+                    springConstant: 0.05,
+                    damping: 0.09
+                },
+                stabilization: {
+                    iterations: 100
+                }
+            },
+            interaction: {
+                hover: true,
+                tooltipDelay: 200,
+                navigationButtons: true,
+                keyboard: true,
+                zoomView: true
+            },
+            layout: {
+                randomSeed: 1,
+                improvedLayout: true
+            }
+        };
+        
+        // Load the network data from the API
+        fetch(`/api/network_data/{{ filename }}`)
+            .then(response => response.json())
+            .then(data => {
+                allNodes = new vis.DataSet(data.nodes);
+                allEdges = new vis.DataSet(data.edges);
+                
+                // Create the network
+                const networkData = {
+                    nodes: allNodes,
+                    edges: allEdges
+                };
+                
+                network = new vis.Network(container, networkData, options);
+                
+                // Network events
+                network.on("doubleClick", function(params) {
+                    if (params.nodes.length > 0) {
+                        // Focus on the selected node
+                        network.focus(params.nodes[0], {
+                            scale: 1.2,
+                            animation: true
+                        });
+                    }
+                });
+                
+                // Stabilize the network for better initial layout
+                network.once("stabilizationIterationsDone", function() {
+                    console.log("Network stabilized");
+                    network.setOptions({ physics: { enabled: false } });
+                });
+                
+                // Set up search functionality
+                setupSearch(network, allNodes);
+                
+                // Set up filter buttons
+                setupFilters(network, allNodes, allEdges);
+                
+                // Set up layout buttons
+                setupLayouts(network);
+                
+                // Set up action buttons
+                setupActionButtons(network, container);
+            })
+            .catch(error => {
+                console.error('Error loading network data:', error);
+                container.innerHTML = `
+                    <div class="flex flex-col items-center justify-center h-full">
+                        <i class="fas fa-exclamation-triangle text-error text-4xl mb-4"></i>
+                        <h3 class="text-xl font-bold text-gray-800 mb-2">Error Loading Data</h3>
+                        <p class="text-gray-600">Failed to load network data: ${error.message}</p>
+                    </div>
+                `;
+            });
+        
+        // Setup search functionality
+        function setupSearch(network, nodes) {
+            const searchInput = document.getElementById('search-input');
+            searchInput.addEventListener('input', function(e) {
+                const searchTerm = e.target.value.toLowerCase();
+                
+                if (searchTerm === '') {
+                    // Reset all nodes to visible
+                    nodes.forEach(node => {
+                        nodes.update({ id: node.id, hidden: false });
+                    });
+                    return;
+                }
+                
+                // Hide nodes that don't match the search term
+                nodes.forEach(node => {
+                    const label = (node.label || '').toLowerCase();
+                    const title = (node.title || '').toLowerCase();
+                    const matches = label.includes(searchTerm) || title.includes(searchTerm);
+                    nodes.update({ id: node.id, hidden: !matches });
+                });
+            });
+        }
+        
+        // Setup filter buttons
+        function setupFilters(network, nodes, edges) {
+            const btnAll = document.getElementById('filter-all');
+            const btnMac = document.getElementById('filter-mac');
+            const btnIp = document.getElementById('filter-ip');
+            
+            btnAll.addEventListener('click', function() {
+                // Show all nodes
+                nodes.forEach(node => {
+                    nodes.update({ id: node.id, hidden: false });
+                });
+                
+                // Update button styles
+                updateFilterButtonStyles(btnAll);
+            });
+            
+            btnMac.addEventListener('click', function() {
+                // Show MAC nodes, hide IP nodes
+                nodes.forEach(node => {
+                    const isMac = node.group === 'mac';
+                    nodes.update({ id: node.id, hidden: !isMac });
+                });
+                
+                // Update button styles
+                updateFilterButtonStyles(btnMac);
+            });
+            
+            btnIp.addEventListener('click', function() {
+                // Show IP nodes, hide MAC nodes
+                nodes.forEach(node => {
+                    const isIp = node.group === 'ip';
+                    nodes.update({ id: node.id, hidden: !isIp });
+                });
+                
+                // Update button styles
+                updateFilterButtonStyles(btnIp);
+            });
+            
+            function updateFilterButtonStyles(activeButton) {
+                // Reset all button styles
+                [btnAll, btnMac, btnIp].forEach(btn => {
+                    btn.classList.remove('bg-primary', 'text-white');
+                    btn.classList.add('bg-gray-200', 'text-gray-800');
+                });
+                
+                // Set active button style
+                activeButton.classList.remove('bg-gray-200', 'text-gray-800');
+                activeButton.classList.add('bg-primary', 'text-white');
+            }
+        }
+        
+        // Setup layout buttons
+        function setupLayouts(network) {
+            const btnHierarchical = document.getElementById('layout-hierarchical');
+            const btnPhysics = document.getElementById('layout-physics');
+            
+            btnHierarchical.addEventListener('click', function() {
+                network.setOptions({
+                    physics: { enabled: false },
+                    layout: {
+                        hierarchical: {
+                            direction: 'LR',
+                            sortMethod: 'directed',
+                            nodeSpacing: 150,
+                            levelSeparation: 200
+                        }
+                    }
+                });
+                
+                // Update button styles
+                updateLayoutButtonStyles(btnHierarchical);
+            });
+            
+            btnPhysics.addEventListener('click', function() {
+                network.setOptions({
+                    layout: { hierarchical: false },
+                    physics: {
+                        enabled: true,
+                        barnesHut: {
+                            gravitationalConstant: -2000,
+                            centralGravity: 0.1,
+                            springLength: 150,
+                            springConstant: 0.05,
+                            damping: 0.09
+                        }
+                    }
+                });
+                
+                // Update button styles
+                updateLayoutButtonStyles(btnPhysics);
+                
+                // Re-enable physics for a short time to let the network find a new layout
+                setTimeout(() => {
+                    network.setOptions({ physics: { enabled: false } });
+                }, 3000);
+            });
+            
+            function updateLayoutButtonStyles(activeButton) {
+                // Reset all button styles
+                [btnHierarchical, btnPhysics].forEach(btn => {
+                    btn.classList.remove('bg-primary', 'text-white');
+                    btn.classList.add('bg-gray-200', 'text-gray-800');
+                });
+                
+                // Set active button style
+                activeButton.classList.remove('bg-gray-200', 'text-gray-800');
+                activeButton.classList.add('bg-primary', 'text-white');
+            }
+        }
+        
+        // Setup action buttons
+        function setupActionButtons(network, container) {
+            const btnFullscreen = document.getElementById('btn-fullscreen');
+            const btnExport = document.getElementById('btn-export');
+            
+            btnFullscreen.addEventListener('click', function() {
+                if (!document.fullscreenElement) {
+                    container.requestFullscreen().catch(err => {
+                        console.error(`Error attempting to enable fullscreen: ${err.message}`);
+                    });
+                } else {
+                    document.exitFullscreen();
+                }
+            });
+            
+            btnExport.addEventListener('click', function() {
+                // Export the current network view as an image
+                const canvas = container.querySelector('canvas');
+                if (canvas) {
+                    html2canvas(container).then(canvas => {
+                        const imageData = canvas.toDataURL('image/png');
+                        const link = document.createElement('a');
+                        link.href = imageData;
+                        link.download = `network_visualization_${Date.now()}.png`;
+                        link.click();
+                    });
+                }
+            });
+        }
+    });
+</script>
+{% endblock %} 
