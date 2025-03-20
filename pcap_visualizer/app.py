@@ -1,12 +1,24 @@
 import os
 import csv
 import json
+import datetime
+import time
 from flask import Flask, render_template, request, jsonify, redirect, url_for
 from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'outputs')
 app.config['ALLOWED_EXTENSIONS'] = {'csv'}
+
+# Ensure upload folder exists with proper permissions
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+
+# Add timestamp_to_datetime filter
+@app.template_filter('timestamp_to_datetime')
+def timestamp_to_datetime(timestamp):
+    """Convert a Unix timestamp to a formatted date string."""
+    dt = datetime.datetime.fromtimestamp(timestamp)
+    return dt.strftime('%Y-%m-%d %H:%M:%S')
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in app.config['ALLOWED_EXTENSIONS']
@@ -85,15 +97,20 @@ def parse_csv_file(file_path):
 
 @app.route('/')
 def index():
-    # Get list of CSV files in the outputs directory
+    # Get list of CSV files in the outputs directory - refresh on each request
     csv_files = []
+    # Ensure the directory exists
+    os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+    
     for filename in os.listdir(app.config['UPLOAD_FOLDER']):
         if filename.endswith('.csv'):
-            csv_files.append({
-                'name': filename,
-                'path': os.path.join(app.config['UPLOAD_FOLDER'], filename),
-                'date': os.path.getmtime(os.path.join(app.config['UPLOAD_FOLDER'], filename))
-            })
+            file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+            if os.path.isfile(file_path):  # Extra check to ensure it's a file
+                csv_files.append({
+                    'name': filename,
+                    'path': file_path,
+                    'date': os.path.getmtime(file_path)
+                })
     
     # Sort by date, newest first
     csv_files.sort(key=lambda x: x['date'], reverse=True)
@@ -129,8 +146,30 @@ def upload_file():
     if file.filename == '' or not allowed_file(file.filename):
         return redirect(url_for('index'))
     
+    # Ensure upload directory exists
+    os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+    
+    # Secure filename to prevent path traversal
     filename = secure_filename(file.filename)
-    file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+    output_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+    
+    # Check if file already exists and handle accordingly (avoid permission issues)
+    if os.path.exists(output_path):
+        try:
+            os.remove(output_path)  # Remove existing file first
+        except (OSError, PermissionError) as e:
+            # If we can't remove, use a different name
+            base, ext = os.path.splitext(filename)
+            filename = f"{base}_{int(time.time())}{ext}"
+            output_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+    
+    # Save the file with proper error handling
+    try:
+        file.save(output_path)
+    except (OSError, PermissionError) as e:
+        # Log the error and provide feedback
+        app.logger.error(f"Error saving file: {e}")
+        return jsonify({'error': str(e)}), 500
     
     return redirect(url_for('visualize', filename=filename))
 
