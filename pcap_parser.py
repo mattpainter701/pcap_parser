@@ -155,6 +155,9 @@ def extract_device_info(pcap_file, debug=False):
     packet_count = 0
     processed_count = 0
     
+    # Keep track of debug info for port protocol verification
+    debug_port_info = []
+    
     try:
         for pkt in capture:
             packet_count += 1
@@ -167,19 +170,46 @@ def extract_device_info(pcap_file, debug=False):
                 src_mac = pkt.eth.src if hasattr(pkt, 'eth') else None
                 dst_mac = pkt.eth.dst if hasattr(pkt, 'eth') else None
                 
-                # Check for TCP/UDP ports
+                # Check for protocol type and ports - improved logic
                 src_port = None
                 dst_port = None
                 proto = None
                 
+                # Check for TCP specifically
                 if hasattr(pkt, 'tcp'):
                     src_port = int(pkt.tcp.srcport)
                     dst_port = int(pkt.tcp.dstport)
                     proto = 'tcp'
+                    
+                    # Debug port protocol verification
+                    if debug and (src_port == 443 or dst_port == 443):
+                        debug_port_info.append({
+                            'packet': packet_count,
+                            'src_ip': src_ip,
+                            'dst_ip': dst_ip,
+                            'src_port': src_port,
+                            'dst_port': dst_port,
+                            'proto': 'TCP',
+                            'layers': [layer.layer_name for layer in pkt.layers]
+                        })
+                        
+                # Check for UDP specifically - only if not already identified as TCP
                 elif hasattr(pkt, 'udp'):
                     src_port = int(pkt.udp.srcport)
                     dst_port = int(pkt.udp.dstport)
                     proto = 'udp'
+                    
+                    # Debug port protocol verification
+                    if debug and (src_port == 443 or dst_port == 443):
+                        debug_port_info.append({
+                            'packet': packet_count,
+                            'src_ip': src_ip,
+                            'dst_ip': dst_ip,
+                            'src_port': src_port,
+                            'dst_port': dst_port,
+                            'proto': 'UDP',
+                            'layers': [layer.layer_name for layer in pkt.layers]
+                        })
 
                 # Filter out invalid MAC addresses
                 if not src_mac or not dst_mac:
@@ -207,7 +237,7 @@ def extract_device_info(pcap_file, debug=False):
                         ip_record['last_seen'] = pkt_time
                         ip_record['packet_count'] += 1
                         
-                        # If we have port information, record it
+                        # If we have port information, record it based on the protocol
                         if proto == 'tcp' and src_port:
                             ip_record['tcp_ports'].add(src_port)
                         elif proto == 'udp' and src_port:
@@ -232,7 +262,7 @@ def extract_device_info(pcap_file, debug=False):
                         ip_record['last_seen'] = pkt_time
                         ip_record['packet_count'] += 1
                         
-                        # If we have port information, record it
+                        # If we have port information, record it based on the protocol
                         if proto == 'tcp' and dst_port:
                             ip_record['tcp_ports'].add(dst_port)
                         elif proto == 'udp' and dst_port:
@@ -253,6 +283,17 @@ def extract_device_info(pcap_file, debug=False):
         capture.close()
         
     print(f"[+] Processed {processed_count} of {packet_count} packets")
+    
+    # Print debug information about port 443 usage if in debug mode
+    if debug and debug_port_info:
+        print("\n[DEBUG] Port 443 Protocol Analysis:")
+        print("=" * 50)
+        for info in debug_port_info[:10]:  # Show first 10 instances
+            print(f"Packet: {info['packet']}, {info['src_ip']}:{info['src_port']} -> {info['dst_ip']}:{info['dst_port']}")
+            print(f"Protocol: {info['proto']}, Layers: {info['layers']}")
+            print("-" * 50)
+        print(f"Total entries: {len(debug_port_info)}")
+    
     return device_info
 
 def download_oui_instructions():
