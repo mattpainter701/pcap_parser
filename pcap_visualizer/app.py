@@ -49,7 +49,16 @@ def parse_csv_file(file_path):
                     'label': mac,
                     'title': f"{vendor}<br/>MAC: {mac}",
                     'group': 'mac',
-                    'shape': 'box'
+                    'shape': 'square',
+                    'color': {
+                        'background': '#97C2FC',
+                        'border': '#2B7CE9'
+                    },
+                    'font': {
+                        'size': 12,
+                        'face': 'arial'
+                    },
+                    'size': 25  # Size for D3-like consistent node sizing
                 }
                 nodes.append(mac_nodes[mac])
             
@@ -61,7 +70,16 @@ def parse_csv_file(file_path):
                     'label': ip,
                     'title': f"IP: {ip}",
                     'group': 'ip',
-                    'shape': 'dot'
+                    'shape': 'circle',
+                    'color': {
+                        'background': '#FB7E81',
+                        'border': '#FA0010'
+                    },
+                    'font': {
+                        'size': 12,
+                        'face': 'arial'
+                    },
+                    'size': 20  # Size for D3-like consistent node sizing
                 }
                 nodes.append(ip_nodes[ip])
             
@@ -83,7 +101,13 @@ def parse_csv_file(file_path):
                     'from': mac_nodes[mac]['id'],
                     'to': ip_nodes[ip]['id'],
                     'title': edge_label,
-                    'label': f"TCP/UDP" if ports_label else ""
+                    'label': f"TCP/UDP" if ports_label else "",
+                    'width': 2,
+                    'length': 200,  # Fixed length similar to D3 examples
+                    'color': {
+                        'color': '#848484',
+                        'highlight': '#848484'
+                    }
                 }
                 
                 # Only add the edge if it doesn't already exist
@@ -129,13 +153,30 @@ def visualize(filename):
 def network_data(filename):
     file_path = os.path.join(app.config['UPLOAD_FOLDER'], secure_filename(filename))
     if not os.path.exists(file_path):
-        return jsonify({'error': 'File not found'}), 404
+        return jsonify({'error': 'File not found', 'nodes': [], 'edges': []}), 404
     
     try:
         data = parse_csv_file(file_path)
+        
+        # Validate data structure
+        if not isinstance(data, dict):
+            data = {'nodes': [], 'edges': []}
+        
+        # Ensure nodes and edges are lists
+        if 'nodes' not in data or not isinstance(data['nodes'], list):
+            data['nodes'] = []
+        if 'edges' not in data or not isinstance(data['edges'], list):
+            data['edges'] = []
+            
         return jsonify(data)
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        app.logger.error(f"Error processing file {filename}: {str(e)}")
+        # Return an empty but valid structure in case of error
+        return jsonify({
+            'error': str(e),
+            'nodes': [],
+            'edges': []
+        }), 500
 
 @app.route('/upload', methods=['POST'])
 def upload_file():

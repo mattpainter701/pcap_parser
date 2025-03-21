@@ -1,5 +1,271 @@
 /* Custom styles for the PCAP Network Visualizer */
 
+/* General Layout */
+body {
+    font-family: 'Arial', sans-serif;
+    margin: 0;
+    padding: 0;
+    background-color: #f5f8fa;
+}
+
+.container {
+    width: 100%;
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 20px;
+}
+
+.page-header {
+    margin-bottom: 20px;
+    border-bottom: 1px solid #e1e4e8;
+    padding-bottom: 10px;
+}
+
+/* File List */
+.file-list {
+    margin-bottom: 30px;
+}
+
+.file-list-item {
+    padding: 10px;
+    background-color: #fff;
+    border-radius: 5px;
+    margin-bottom: 10px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.file-list-item:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+}
+
+.file-list-item a {
+    color: #0366d6;
+    text-decoration: none;
+    font-weight: 600;
+}
+
+.file-list-item a:hover {
+    text-decoration: underline;
+}
+
+.file-info {
+    display: flex;
+    justify-content: space-between;
+    color: #586069;
+    font-size: 0.9em;
+    margin-top: 5px;
+}
+
+/* Visualization Panel */
+.panel-container {
+    display: flex;
+    height: calc(100vh - 120px);
+    border-radius: 5px;
+    overflow: hidden;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+
+#control-panel {
+    width: 220px;
+    background-color: #fff;
+    padding: 15px;
+    overflow-y: auto;
+    border-right: 1px solid #e1e4e8;
+}
+
+#visualization-container {
+    flex-grow: 1;
+    position: relative;
+    background-color: #fff;
+}
+
+/* Network Graph Styles */
+#network {
+    width: 100%;
+    height: 100%;
+    position: relative;
+}
+
+/* Control Panel Elements */
+.panel-section {
+    margin-bottom: 20px;
+}
+
+.panel-section h3 {
+    font-size: 14px;
+    margin-bottom: 10px;
+    color: #24292e;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.control-group {
+    margin-bottom: 12px;
+}
+
+.control-group label {
+    display: block;
+    margin-bottom: 5px;
+    font-size: 12px;
+    color: #586069;
+}
+
+/* Button Styles */
+.btn {
+    display: inline-block;
+    background-color: #0366d6;
+    color: white;
+    border: none;
+    padding: 6px 12px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 12px;
+    transition: background-color 0.2s ease;
+    width: 100%;
+    text-align: center;
+    margin-bottom: 8px;
+}
+
+.btn:hover {
+    background-color: #0056b3;
+}
+
+.btn-secondary {
+    background-color: #6c757d;
+}
+
+.btn-secondary:hover {
+    background-color: #5a6268;
+}
+
+/* Slider Styles */
+.slider-container {
+    padding: 5px 0;
+}
+
+input[type=range] {
+    width: 100%;
+    background: transparent;
+}
+
+/* Node and Edge Details */
+.node-details, .edge-details {
+    position: absolute;
+    background-color: rgba(255, 255, 255, 0.95);
+    border: 1px solid #e1e4e8;
+    border-radius: 5px;
+    padding: 10px;
+    font-size: 12px;
+    max-width: 250px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    z-index: 1000;
+}
+
+/* Tooltip styles for node and edge hovering */
+.vis-tooltip {
+    position: absolute;
+    visibility: hidden;
+    padding: 5px;
+    white-space: nowrap;
+    font-family: verdana;
+    font-size: 14px;
+    color: #000000;
+    background-color: #f5f4ed;
+    -moz-border-radius: 3px;
+    -webkit-border-radius: 3px;
+    border-radius: 3px;
+    border: 1px solid #808074;
+    box-shadow: 3px 3px 10px rgba(0, 0, 0, 0.2);
+    pointer-events: none;
+    z-index: 1;
+}
+
+/* Search panel */
+.search-box {
+    position: absolute;
+    top: 20px;
+    right: 20px;
+    z-index: 10;
+    background: white;
+    padding: 10px;
+    border-radius: 5px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    display: flex;
+}
+
+.search-box input {
+    padding: 5px 10px;
+    border: 1px solid #ddd;
+    border-radius: 3px;
+    margin-right: 5px;
+}
+
+.search-box button {
+    background: #0366d6;
+    color: white;
+    border: none;
+    border-radius: 3px;
+    padding: 5px 10px;
+    cursor: pointer;
+}
+
+/* D3-style node styling */
+.node circle {
+    stroke-width: 1.5px;
+}
+
+.node text {
+    font-size: 10px;
+}
+
+.link {
+    stroke-opacity: 0.6;
+}
+
+/* Responsive styles */
+@media (max-width: 768px) {
+    .panel-container {
+        flex-direction: column;
+        height: calc(100vh - 100px);
+    }
+    
+    #control-panel {
+        width: 100%;
+        height: auto;
+        max-height: 200px;
+        border-right: none;
+        border-bottom: 1px solid #e1e4e8;
+    }
+}
+
+/* Loading indicator */
+.loading {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+}
+
+.spinner {
+    border: 4px solid rgba(0, 0, 0, 0.1);
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    border-left-color: #09f;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
 /* General styles */
 body {
     font-family: 'Roboto', sans-serif;
@@ -16,6 +282,10 @@ body {
 
 /* Network container */
 #network-container {
+    position: relative;
+    z-index: 0; /* Ensure proper stacking context */
+    background: white; /* Temporary background to verify rendering */
+    border: 2px solid red; /* Temporary border to verify dimensions */
     transition: height 0.3s ease;
 }
 
@@ -107,4 +377,10 @@ button:active {
 
 .file-list-item:hover {
     background-color: #f8fafc;
+}
+
+/* Remove conflicting transforms */
+#network-container canvas {
+    position: static !important;
+    transform: none !important;
 } 

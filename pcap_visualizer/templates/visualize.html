@@ -146,8 +146,15 @@
     </div>
 </div>
 
-<!-- Visualization container -->
-<div id="network-container"></div>
+<!-- Fix the visualization container structure to match JavaScript expectations -->
+<div id="network-container">
+    <!-- Add search box -->
+    <div class="search-box">
+        <input type="text" id="search-input" placeholder="Search by IP or MAC">
+        <button id="search-button">Search</button>
+    </div>
+    <div id="network"></div>
+</div>
 
 <!-- Simplified and more compact legend -->
 <div class="controls-container flex items-center bg-white rounded-lg shadow-md compact-legend">
@@ -176,7 +183,8 @@
 
 <script>
     document.addEventListener('DOMContentLoaded', function() {
-        const container = document.getElementById('network-container');
+        // Fix: Get the correct container element
+        const container = document.getElementById('network');
         let network = null;
         let allNodes = [];
         let allEdges = [];
@@ -253,20 +261,27 @@
             groups: groups,
             physics: {
                 enabled: true,
+                // D3-style physics configuration as default
                 barnesHut: {
-                    gravitationalConstant: -8000,  // Further increased repulsion
-                    centralGravity: 0.03,         // Further reduced central gravity
-                    springLength: 300,            // Further increased spring length
-                    springConstant: 0.03,         // Further reduced spring constant
+                    gravitationalConstant: -2000,     // Similar to d3.forceManyBody().strength(-200)
+                    centralGravity: 0.01,             // Weak central gravity like in D3
+                    springLength: 200,                // Similar to d3.forceLink().distance(200)
+                    springConstant: 0.04,             // Moderate spring constant
                     damping: 0.09,
-                    avoidOverlap: 1               // Maximum avoidance of node overlap
+                    avoidOverlap: 1.0                 // Maximum avoidance (d3.forceCollide)
                 },
+                solver: 'barnesHut',
                 stabilization: {
-                    iterations: 200,
+                    enabled: true,
+                    iterations: 250,                  // More iterations for better stability
                     updateInterval: 25,
+                    onlyDynamicEdges: false,
                     fit: true
                 },
-                minVelocity: 0.75            // Allows simulation to continue longer
+                timestep: 0.3,                        // Smaller timestep for more stable simulation
+                adaptiveTimestep: true,
+                maxVelocity: 50,                      // Allow higher velocity initially (d3.alphaTarget(0.3))
+                minVelocity: 0.15                     // Lower minimum velocity (d3's low friction)
             },
             interaction: {
                 hover: true,
@@ -286,6 +301,8 @@
         fetch(`/api/network_data/{{ filename }}`)
             .then(response => response.json())
             .then(data => {
+                console.log("Received network data:", data);
+                
                 allNodes = new vis.DataSet(data.nodes);
                 allEdges = new vis.DataSet(data.edges);
                 
@@ -295,7 +312,138 @@
                     edges: allEdges
                 };
                 
+                console.log("Creating network with container:", container);
+                console.log("Container exists:", !!container);
+                if (container) {
+                    console.log("Container dimensions:", container.offsetWidth, "x", container.offsetHeight);
+                }
+                
                 network = new vis.Network(container, networkData, options);
+                
+                // Add search functionality
+                document.getElementById('search-button').addEventListener('click', performSearch);
+                document.getElementById('search-input').addEventListener('keyup', function(event) {
+                    if (event.key === "Enter") {
+                        performSearch();
+                    }
+                });
+                
+                function performSearch() {
+                    const searchTerm = document.getElementById('search-input').value.trim().toLowerCase();
+                    if (!searchTerm) return;
+                    
+                    console.log("Searching for:", searchTerm);
+                    
+                    // Get all nodes
+                    const nodeIds = network.getNodeIds();
+                    const foundNodes = [];
+                    
+                    // Search through nodes
+                    nodeIds.forEach(id => {
+                        const node = networkData.nodes.get(id);
+                        if (node.label.toLowerCase().includes(searchTerm)) {
+                            foundNodes.push(id);
+                        }
+                    });
+                    
+                    if (foundNodes.length > 0) {
+                        // Focus on the first match
+                        network.focus(foundNodes[0], {
+                            scale: 1.2,
+                            animation: true
+                        });
+                        network.selectNodes(foundNodes);
+                        
+                        // Highlight the found nodes
+                        const updatedNodes = foundNodes.map(id => {
+                            const node = networkData.nodes.get(id);
+                            const originalColor = node.color ? { ...node.color } : null;
+                            
+                            return {
+                                id: id,
+                                color: {
+                                    background: '#FFFF00',
+                                    border: '#FFA500',
+                                    highlight: {
+                                        background: '#FFFF00',
+                                        border: '#FFA500'
+                                    },
+                                    _originalColor: originalColor
+                                }
+                            };
+                        });
+                        
+                        networkData.nodes.update(updatedNodes);
+                        
+                        // Reset highlight after a delay
+                        setTimeout(() => {
+                            const resetNodes = foundNodes.map(id => {
+                                const node = networkData.nodes.get(id);
+                                return {
+                                    id: id,
+                                    color: node.color._originalColor
+                                };
+                            });
+                            networkData.nodes.update(resetNodes);
+                        }, 3000);
+                        
+                        console.log(`Found ${foundNodes.length} nodes matching "${searchTerm}"`);
+                    } else {
+                        console.log(`No nodes found matching "${searchTerm}"`);
+                        alert(`No nodes found matching "${searchTerm}"`);
+                    }
+                }
+                
+                // Apply D3-style collision handling and boundary forces after initial stabilization
+                network.once('stabilizationIterationsDone', function() {
+                    console.log("Initial force-directed layout stabilized");
+                    
+                    setTimeout(() => {
+                        // Apply collision handling and boundary forces
+                        const nodeIds = network.getNodeIds();
+                        const positions = network.getPositions(nodeIds);
+                        const containerRect = document.getElementById('network-container').getBoundingClientRect();
+                        
+                        // Get dimensions for boundary constraints (similar to D3 example's transform function)
+                        const width = containerRect.width;
+                        const height = containerRect.height;
+                        const nodeRadius = 25; // Similar to D3 example
+                        const forcePadding = nodeRadius + 10;
+                        
+                        // Apply container boundary constraints to keep nodes within visible area
+                        nodeIds.forEach(nodeId => {
+                            const pos = positions[nodeId];
+                            if (!pos) return;
+                            
+                            // Apply boundary constraints similar to D3 transform function
+                            let x = pos.x;
+                            let y = pos.y;
+                            
+                            // Apply padding to keep nodes within boundaries
+                            x = x <= -width/2 + forcePadding ? -width/2 + forcePadding : 
+                                x >= width/2 - forcePadding ? width/2 - forcePadding : x;
+                            y = y <= -height/2 + forcePadding ? -height/2 + forcePadding : 
+                                y >= height/2 - forcePadding ? height/2 - forcePadding : y;
+                            
+                            // Move node if needed
+                            if (x !== pos.x || y !== pos.y) {
+                                network.moveNode(nodeId, x, y);
+                            }
+                        });
+                        
+                        // Set gentler physics for ongoing simulation
+                        network.setOptions({
+                            physics: {
+                                enabled: true,
+                                maxVelocity: 5,        // Reduce max velocity after layout
+                                minVelocity: 0.1,      // Gentle movement threshold
+                                stabilization: {
+                                    enabled: false     // Disable further full stabilization
+                                }
+                            }
+                        });
+                    }, 1000);
+                });
                 
                 // Network events
                 network.on("doubleClick", function(params) {
@@ -444,11 +592,21 @@
             const btnHierarchical = document.getElementById('layout-hierarchical');
             const btnPhysics = document.getElementById('layout-physics');
             
+            // Hierarchical button handler
             btnHierarchical.addEventListener('click', function() {
+                // Update button styles first
+                updateLayoutButtonStyles(btnHierarchical);
+                
+                console.log("Switching to Hierarchical view");
+                
+                // Explicitly enable hierarchical layout and disable physics
                 network.setOptions({
-                    physics: { enabled: false },
+                    physics: { 
+                        enabled: false 
+                    },
                     layout: {
                         hierarchical: {
+                            enabled: true,  // Explicitly enable hierarchical layout
                             direction: 'LR',
                             sortMethod: 'directed',
                             nodeSpacing: 250,         // Increased node spacing
@@ -457,55 +615,56 @@
                         }
                     }
                 });
-                
-                // Update button styles
-                updateLayoutButtonStyles(btnHierarchical);
             });
             
+            // Force Directed button handler
             btnPhysics.addEventListener('click', function() {
+                // Update button styles first
+                updateLayoutButtonStyles(btnPhysics);
+                
+                console.log("Switching to Force Directed view");
+                
+                // First disable hierarchical layout explicitly, then enable physics
                 network.setOptions({
-                    layout: { hierarchical: false },
-                    physics: {
-                        enabled: true,
-                        barnesHut: {
-                            gravitationalConstant: -8000,     // Further increased repulsion
-                            centralGravity: 0.03,             // Further reduced central gravity
-                            springLength: 300,                // Further increased spring length
-                            springConstant: 0.03,             // Further reduced spring constant
-                            damping: 0.09,
-                            avoidOverlap: 1                   // Maximum avoidance of node overlap
-                        }
+                    layout: { 
+                        hierarchical: { 
+                            enabled: false  // Explicitly disable hierarchical layout
+                        } 
                     }
                 });
                 
-                // Update button styles
-                updateLayoutButtonStyles(btnPhysics);
-                
-                // Re-enable physics for a longer time to find a better layout
-                setTimeout(() => {
-                    // Apply final spacing by scaling the positions outward
-                    const nodeIds = network.getNodeIds();
-                    const positions = network.getPositions(nodeIds);
-                    const nodeData = allNodes.get();
-                    
-                    // Group nodes by type
-                    const ipNodes = nodeData.filter(node => node.group === 'ip').map(node => node.id);
-                    const macNodes = nodeData.filter(node => node.group === 'mac').map(node => node.id);
-                    
-                    // Scale positions outward by different factors based on node type
-                    for (const nodeId of nodeIds) {
-                        const pos = positions[nodeId];
-                        if (ipNodes.includes(nodeId)) {
-                            // IP nodes get expanded more (40% scaling)
-                            network.moveNode(nodeId, pos.x * 1.4, pos.y * 1.4);
-                        } else {
-                            // MAC nodes get normal expansion (20% scaling)
-                            network.moveNode(nodeId, pos.x * 1.2, pos.y * 1.2);
-                        }
+                // Separate call to enable physics
+                network.setOptions({
+                    physics: {
+                        enabled: true,
+                        // D3-style physics configuration
+                        barnesHut: {
+                            gravitationalConstant: -2000,     // Similar to d3.forceManyBody().strength(-200)
+                            centralGravity: 0.01,             // Weak central gravity like in D3
+                            springLength: 200,                // Similar to d3.forceLink().distance(200)
+                            springConstant: 0.04,             // Moderate spring constant
+                            damping: 0.09,                    
+                            avoidOverlap: 1.0                 // Maximum avoidance (d3.forceCollide)
+                        },
+                        solver: 'barnesHut',
+                        stabilization: {
+                            enabled: true,
+                            iterations: 250,                  // More iterations for better stability
+                            updateInterval: 25,
+                            onlyDynamicEdges: false,
+                            fit: false                        // Don't fit to view to preserve positions
+                        },
+                        timestep: 0.3,                        // Smaller timestep for more stable simulation
+                        adaptiveTimestep: true,
+                        maxVelocity: 50,                      // Allow higher velocity initially
+                        minVelocity: 0.15                     // Lower minimum velocity
                     }
-                    
-                    network.setOptions({ physics: { enabled: false } });
-                }, 5000);  // Longer time for better layout
+                });
+                
+                // Apply collision handling after physics has started
+                setTimeout(function() {
+                    applyCollisionHandling();
+                }, 1000);
             });
             
             function updateLayoutButtonStyles(activeButton) {
@@ -519,6 +678,50 @@
                 activeButton.classList.remove('bg-gray-200', 'text-gray-800');
                 activeButton.classList.add('bg-primary', 'text-white');
             }
+            
+            // Helper function to apply D3-style collision handling and boundary forces
+            function applyCollisionHandling() {
+                const nodeIds = network.getNodeIds();
+                const positions = network.getPositions(nodeIds);
+                const containerRect = document.getElementById('network-container').getBoundingClientRect();
+                
+                // Get dimensions to apply boundary constraints
+                const width = containerRect.width;
+                const height = containerRect.height;
+                const nodeRadius = 25;
+                const forcePadding = nodeRadius + 10;
+                
+                console.log("Applying collision handling to", nodeIds.length, "nodes");
+                
+                // Apply container boundary constraints
+                nodeIds.forEach(nodeId => {
+                    const pos = positions[nodeId];
+                    if (!pos) return;
+                    
+                    // Apply boundary constraints
+                    let x = pos.x;
+                    let y = pos.y;
+                    
+                    // Apply padding to keep nodes within boundaries
+                    x = x <= -width/2 + forcePadding ? -width/2 + forcePadding : 
+                        x >= width/2 - forcePadding ? width/2 - forcePadding : x;
+                    y = y <= -height/2 + forcePadding ? -height/2 + forcePadding : 
+                        y >= height/2 - forcePadding ? height/2 - forcePadding : y;
+                    
+                    // Move node if position changed
+                    if (x !== pos.x || y !== pos.y) {
+                        network.moveNode(nodeId, x, y);
+                    }
+                });
+                
+                // Reduce velocity after collision handling
+                network.setOptions({
+                    physics: {
+                        maxVelocity: 5,
+                        minVelocity: 0.1
+                    }
+                });
+            }
         }
         
         // Setup action buttons
@@ -527,8 +730,10 @@
             const btnExport = document.getElementById('btn-export');
             
             btnFullscreen.addEventListener('click', function() {
+                // Use the visualization-container for fullscreen
+                const visualizationContainer = document.getElementById('network-container');
                 if (!document.fullscreenElement) {
-                    container.requestFullscreen().catch(err => {
+                    visualizationContainer.requestFullscreen().catch(err => {
                         console.error(`Error attempting to enable fullscreen: ${err.message}`);
                     });
                 } else {
@@ -538,9 +743,9 @@
             
             btnExport.addEventListener('click', function() {
                 // Export the current network view as an image
-                const canvas = container.querySelector('canvas');
-                if (canvas) {
-                    html2canvas(container).then(canvas => {
+                const networkContainer = document.getElementById('network-container');
+                if (networkContainer) {
+                    html2canvas(networkContainer).then(canvas => {
                         const imageData = canvas.toDataURL('image/png');
                         const link = document.createElement('a');
                         link.href = imageData;
@@ -551,7 +756,7 @@
             });
         }
         
-        // Improved resize handler to ensure everything fits on screen
+        // Fix: Update the resize function to use the correct container
         function resizeNetwork() {
             if (network) {
                 // Calculate available height
@@ -564,8 +769,12 @@
                 // Calculate available height
                 const availableHeight = window.innerHeight - headerHeight - controlsHeight - legendHeight - footerHeight - spacing;
                 
-                // Set network container height
-                network.setSize('100vw', `${availableHeight}px`);
+                // Set visualization container height
+                const visualizationContainer = document.getElementById('network-container');
+                visualizationContainer.style.height = `${availableHeight}px`;
+                
+                // Update network size
+                network.setSize('100%', '100%');
                 network.redraw();
             }
         }

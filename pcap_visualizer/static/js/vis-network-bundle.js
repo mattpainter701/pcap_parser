@@ -22,10 +22,22 @@ const vis = {
     
     Network: class Network {
         constructor(container, data, options) {
+            // Add error handling for null container
+            if (!container) {
+                console.error("Container element is null or undefined");
+                throw new Error("Cannot initialize Network: container element is null or undefined");
+            }
+            
             this.container = container;
             this.data = data;
             this.options = options;
             this.events = {};
+            
+            // Check if data is valid
+            if (!data || !data.nodes || !data.edges) {
+                console.error("Invalid data format:", data);
+                throw new Error("Cannot initialize Network: invalid data format");
+            }
             
             // Clear the container
             this.container.innerHTML = '';
@@ -679,9 +691,15 @@ const vis = {
         setOptions(options) {
             this.options = { ...this.options, ...options };
             
-            // Handle hierarchical layout option
-            if (options.layout && options.layout.hierarchical) {
-                this.renderHierarchicalLayout();
+            // Track the current layout mode
+            if (options.layout) {
+                if (options.layout.hierarchical && options.layout.hierarchical.enabled === true) {
+                    this.currentLayoutMode = 'hierarchical';
+                    this.renderHierarchicalLayout();
+                } else if (options.layout.hierarchical && options.layout.hierarchical.enabled === false) {
+                    this.currentLayoutMode = 'force-directed';
+                    this.renderForceDirectedLayout();
+                }
             } else if (options.physics && options.physics.enabled) {
                 this.renderForceDirectedLayout();
             }
@@ -696,6 +714,8 @@ const vis = {
         }
         
         renderHierarchicalLayout() {
+            console.log("Rendering hierarchical layout");
+            
             const width = this.svg.getAttribute("width");
             const height = this.svg.getAttribute("height");
             
@@ -703,6 +723,10 @@ const vis = {
             this.scale = 1;
             this.translateX = 0;
             this.translateY = 0;
+            
+            // Clear any existing force-directed layout
+            this.linksGroup.innerHTML = '';
+            this.nodesGroup.innerHTML = '';
             
             // Reset node positions from scratch
             const positions = {};
@@ -740,25 +764,39 @@ const vis = {
             // Completely replace node positions
             this.nodePositions = positions;
             
-            // Update transform
-            const updateTransform = () => {
-                this.linksGroup.setAttribute('transform', 
-                    `translate(${this.translateX},${this.translateY}) scale(${this.scale})`);
-                this.nodesGroup.setAttribute('transform', 
-                    `translate(${this.translateX},${this.translateY}) scale(${this.scale})`);
-            };
-            updateTransform();
-            
-            // Clear and render the network
-            this.linksGroup.innerHTML = '';
-            this.nodesGroup.innerHTML = '';
+            // Render with new positions
             this.renderEdges(positions);
             this.renderNodes(positions);
+            
+            // Update transform
+            this.linksGroup.setAttribute('transform', 
+                `translate(${this.translateX},${this.translateY}) scale(${this.scale})`);
+            this.nodesGroup.setAttribute('transform', 
+                `translate(${this.translateX},${this.translateY}) scale(${this.scale})`);
         }
         
         renderForceDirectedLayout() {
-            // Use our circular layout which is cleaner than random force-directed
-            this.renderVisualization();
+            console.log("Rendering force-directed layout");
+            
+            // Clear any existing hierarchical layout
+            this.linksGroup.innerHTML = '';
+            this.nodesGroup.innerHTML = '';
+            
+            // Calculate fresh force-directed positions for all nodes
+            const width = this.svg.getAttribute("width");
+            const height = this.svg.getAttribute("height");
+            
+            this.nodePositions = this.calculateOptimizedPositions(width, height);
+            
+            // Render with new positions
+            this.renderEdges(this.nodePositions);
+            this.renderNodes(this.nodePositions);
+            
+            // Update transform
+            this.linksGroup.setAttribute('transform', 
+                `translate(${this.translateX},${this.translateY}) scale(${this.scale})`);
+            this.nodesGroup.setAttribute('transform', 
+                `translate(${this.translateX},${this.translateY}) scale(${this.scale})`);
         }
 
         // Add new method for grid background
@@ -919,13 +957,21 @@ const vis = {
             resetLayoutBtn.style.borderRadius = '4px';
             
             resetLayoutBtn.addEventListener('click', () => {
+                console.log("Resetting layout, current mode:", this.currentLayoutMode);
+                
                 // Reset transformation
                 this.scale = 1;
                 this.translateX = 0;
                 this.translateY = 0;
                 
-                // Recalculate default layout
-                this.renderVisualization();
+                // Reset based on current layout mode
+                if (this.currentLayoutMode === 'hierarchical') {
+                    this.renderHierarchicalLayout();
+                } else {
+                    // Use renderForceDirectedLayout instead of renderVisualization 
+                    // to maintain connection consistency
+                    this.renderForceDirectedLayout();
+                }
             });
             
             this.container.appendChild(resetLayoutBtn);
