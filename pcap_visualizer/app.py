@@ -8,7 +8,7 @@ from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'outputs')
-app.config['ALLOWED_EXTENSIONS'] = {'csv'}
+app.config['ALLOWED_EXTENSIONS'] = {'csv', 'json'}
 
 # Ensure upload folder exists with proper permissions
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
@@ -119,27 +119,50 @@ def parse_csv_file(file_path):
         'edges': edges
     }
 
+def parse_json_file(file_path):
+    """Parse a JSON file containing network data for visualization."""
+    try:
+        with open(file_path, 'r') as f:
+            data = json.load(f)
+            
+        # Validate the JSON structure
+        if not isinstance(data, dict):
+            return {'nodes': [], 'edges': []}
+            
+        if 'nodes' not in data or not isinstance(data['nodes'], list):
+            data['nodes'] = []
+            
+        if 'edges' not in data or not isinstance(data['edges'], list):
+            data['edges'] = []
+            
+        return data
+    except Exception as e:
+        app.logger.error(f"Error parsing JSON file: {str(e)}")
+        return {'nodes': [], 'edges': []}
+
 @app.route('/')
 def index():
-    # Get list of CSV files in the outputs directory - refresh on each request
-    csv_files = []
+    # Get list of CSV and JSON files in the outputs directory - refresh on each request
+    files = []
     # Ensure the directory exists
     os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
     
     for filename in os.listdir(app.config['UPLOAD_FOLDER']):
-        if filename.endswith('.csv'):
+        if filename.endswith(('.csv', '.json')):
             file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
             if os.path.isfile(file_path):  # Extra check to ensure it's a file
-                csv_files.append({
+                file_type = 'json' if filename.endswith('.json') else 'csv'
+                files.append({
                     'name': filename,
                     'path': file_path,
-                    'date': os.path.getmtime(file_path)
+                    'date': os.path.getmtime(file_path),
+                    'type': file_type
                 })
     
     # Sort by date, newest first
-    csv_files.sort(key=lambda x: x['date'], reverse=True)
+    files.sort(key=lambda x: x['date'], reverse=True)
     
-    return render_template('index.html', csv_files=csv_files)
+    return render_template('index.html', files=files)
 
 @app.route('/visualize/<filename>')
 def visualize(filename):
@@ -156,7 +179,11 @@ def network_data(filename):
         return jsonify({'error': 'File not found', 'nodes': [], 'edges': []}), 404
     
     try:
-        data = parse_csv_file(file_path)
+        # Determine file type and parse accordingly
+        if filename.endswith('.json'):
+            data = parse_json_file(file_path)
+        else:  # Default to CSV
+            data = parse_csv_file(file_path)
         
         # Validate data structure
         if not isinstance(data, dict):
