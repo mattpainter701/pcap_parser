@@ -190,7 +190,7 @@
     let allEdges = null;
     
     document.addEventListener('DOMContentLoaded', function() {
-        // Initialize datasets
+        // Initialize datasets - use empty arrays initially
         allNodes = new vis.DataSet([]);
         allEdges = new vis.DataSet([]);
         
@@ -314,705 +314,419 @@
             }
         };
         
+        // Create an initial empty network with empty datasets
+        const networkData = {
+            nodes: allNodes,
+            edges: allEdges
+        };
+        
+        // Initialize the network with empty data to ensure it exists
+        if (container) {
+            network = new vis.Network(container, networkData, options);
+            console.log("Network initialized with empty data");
+        } else {
+            console.error("Network container not found!");
+            return;
+        }
+        
         // Load the network data from the API
         fetch(`/api/network_data/{{ filename }}`)
-            .then(response => response.json())
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`Network response was not ok: ${response.status}`);
+                }
+                return response.json();
+            })
             .then(data => {
                 console.log("Received network data:", data);
                 
                 try {
-                    // Make deep copies to avoid reference issues
-                    const nodeData = Array.isArray(data.nodes) ? [...data.nodes] : [];
-                    const edgeData = Array.isArray(data.edges) ? [...data.edges] : [];
-
-                    // Create new datasets with the copied data
-                    allNodes = new vis.DataSet(nodeData);
-                    allEdges = new vis.DataSet(edgeData);
-                    
-                    // Verify that the datasets have been created successfully
-                    console.log(`Created network with ${allNodes.length} nodes and ${allEdges.length} edges`);
-                    
-                    // Create the network with the new datasets
-                    const networkData = {
-                        nodes: allNodes,
-                        edges: allEdges
-                    };
-                    
-                    console.log("Creating network with container:", container);
-                    console.log("Container exists:", !!container);
-                    if (container) {
-                        console.log("Container dimensions:", container.offsetWidth, "x", container.offsetHeight);
+                    if (!data || !Array.isArray(data.nodes) || !Array.isArray(data.edges)) {
+                        console.error("Invalid data format:", data);
+                        throw new Error("Invalid data format received from server");
                     }
                     
-                    // Initialize the global network variable
-                    network = new vis.Network(container, networkData, options);
-                } catch (err) {
-                    console.error("Error setting up network data:", err);
-                    throw err;
-                }
-                
-                // Ensure network is fully initialized before registering events
-                if (network) {
-                    // Network events
-                    network.on("doubleClick", function(params) {
-                        if (params.nodes.length > 0) {
-                            // Focus on the selected node
-                            network.focus(params.nodes[0], {
-                                scale: 1.2,
-                                animation: true
-                            });
-                        }
+                    // Clear existing data
+                    allNodes.clear();
+                    allEdges.clear();
+                    
+                    // Add the new data
+                    allNodes.add(data.nodes);
+                    allEdges.add(data.edges);
+                    
+                    console.log(`Loaded ${allNodes.length} nodes and ${allEdges.length} edges`);
+                    
+                    // Update the network with new data
+                    network.setData({
+                        nodes: allNodes,
+                        edges: allEdges
                     });
                     
-                    // Stabilize the network for better initial layout
-                    network.once("stabilizationIterationsDone", function() {
-                        console.log("Network stabilized");
-                        
-                        if (!network || typeof network.getNodeIds !== 'function') {
-                            console.warn("Network is not properly initialized or doesn't have getNodeIds method");
-                            return;
-                        }
-                        
-                        // Apply a final layout adjustment to spread nodes further
-                        const nodeIds = network.getNodeIds();
-                        const positions = network.getPositions(nodeIds);
-                        const nodeData = allNodes.get();
-                        
-                        // Group nodes by type
-                        const ipNodes = nodeData.filter(node => node.group === 'ip').map(node => node.id);
-                        const macNodes = nodeData.filter(node => node.group === 'mac').map(node => node.id);
-                        
-                        // Scale positions outward by different factors based on node type
-                        // IP nodes get more expansion than MAC nodes
-                        for (const nodeId of nodeIds) {
-                            const pos = positions[nodeId];
-                            if (ipNodes.includes(nodeId)) {
-                                // IP nodes get expanded more (40% scaling)
-                                network.moveNode(nodeId, pos.x * 1.4, pos.y * 1.4);
-                            } else {
-                                // MAC nodes get normal expansion (20% scaling)
-                                network.moveNode(nodeId, pos.x * 1.2, pos.y * 1.2);
-                            }
-                        }
-                        
-                        // Disable physics after stabilization
-                        network.setOptions({ physics: { enabled: false } });
-                        
-                        // Call resize after stabilization
-                        setTimeout(resizeNetwork, 100);
-                    });
-                } else {
-                    console.error("Failed to initialize network");
+                    console.log("Network is ready, applying default layout");
+                    
+                } catch (err) {
+                    console.error("Error setting up network data:", err);
                 }
                 
-                // Add search functionality
-                document.getElementById('search-button').addEventListener('click', performSearch);
-                document.getElementById('search-input').addEventListener('keyup', function(event) {
+                // Register network events only after data is loaded
+                setupNetworkEvents();
+                
+            })
+            .catch(error => {
+                console.error("Error fetching network data:", error);
+            });
+            
+        // Setup all network event handlers
+        function setupNetworkEvents() {
+            if (!network) {
+                console.error("Cannot setup events: network not initialized");
+                return;
+            }
+            
+            // Double-click event
+            network.on("doubleClick", function(params) {
+                if (params.nodes && params.nodes.length > 0) {
+                    // Focus on the selected node
+                    network.focus(params.nodes[0], {
+                        scale: 1.2,
+                        animation: true
+                    });
+                }
+            });
+            
+            // Stabilization complete event
+            network.once("stabilizationIterationsDone", function() {
+                console.log("Network stabilized");
+                
+                // Safely check if methods exist before calling them
+                if (network && typeof network.getNodeIds === 'function') {
+                    // Apply a final layout adjustment to spread nodes further
+                    applyFinalLayoutAdjustment();
+                } else {
+                    console.warn("Network is not properly initialized or doesn't have getNodeIds method");
+                }
+                
+                // Make sure to call resize after stabilization
+                setTimeout(resizeNetwork, 100);
+            });
+            
+            // Add search functionality
+            const searchButton = document.getElementById('search-button');
+            const searchInput = document.getElementById('search-input');
+            
+            if (searchButton) {
+                searchButton.addEventListener('click', performSearch);
+            }
+            
+            if (searchInput) {
+                searchInput.addEventListener('keyup', function(event) {
                     if (event.key === "Enter") {
                         performSearch();
                     }
                 });
-                
-                function performSearch() {
-                    const searchTerm = document.getElementById('search-input').value.trim().toLowerCase();
-                    if (!searchTerm) return;
-                    
-                    console.log("Searching for:", searchTerm);
-                    
-                    // Get all nodes
-                    const nodeIds = network.getNodeIds();
-                    const foundNodes = [];
-                    
-                    // Search through nodes
-                    nodeIds.forEach(id => {
-                        const node = networkData.nodes.get(id);
-                        if (node.label.toLowerCase().includes(searchTerm)) {
-                            foundNodes.push(id);
-                        }
-                    });
-                    
-                    if (foundNodes.length > 0) {
-                        // Focus on the first match
-                        network.focus(foundNodes[0], {
-                            scale: 1.2,
-                            animation: true
-                        });
-                        network.selectNodes(foundNodes);
-                        
-                        // Highlight the found nodes
-                        const updatedNodes = foundNodes.map(id => {
-                            const node = networkData.nodes.get(id);
-                            const originalColor = node.color ? { ...node.color } : null;
-                            
-                            return {
-                                id: id,
-                                color: {
-                                    background: '#FFFF00',
-                                    border: '#FFA500',
-                                    highlight: {
-                                        background: '#FFFF00',
-                                        border: '#FFA500'
-                                    },
-                                    _originalColor: originalColor
-                                }
-                            };
-                        });
-                        
-                        networkData.nodes.update(updatedNodes);
-                        
-                        // Reset highlight after a delay
-                        setTimeout(() => {
-                            const resetNodes = foundNodes.map(id => {
-                                const node = networkData.nodes.get(id);
-                                return {
-                                    id: id,
-                                    color: node.color._originalColor
-                                };
-                            });
-                            networkData.nodes.update(resetNodes);
-                        }, 3000);
-                        
-                        console.log(`Found ${foundNodes.length} nodes matching "${searchTerm}"`);
-                    } else {
-                        console.log(`No nodes found matching "${searchTerm}"`);
-                        alert(`No nodes found matching "${searchTerm}"`);
-                    }
-                }
-                
-                // Apply D3-style collision handling and boundary forces after initial stabilization
-                network.once('stabilizationIterationsDone', function() {
-                    console.log("Initial force-directed layout stabilized");
-                    
-                    setTimeout(() => {
-                        // Apply collision handling and boundary forces
-                        const nodeIds = network.getNodeIds();
-                        const positions = network.getPositions(nodeIds);
-                        const containerRect = document.getElementById('network-container').getBoundingClientRect();
-                        
-                        // Get dimensions for boundary constraints (similar to D3 example's transform function)
-                        const width = containerRect.width;
-                        const height = containerRect.height;
-                        const nodeRadius = 25; // Similar to D3 example
-                        const forcePadding = nodeRadius + 10;
-                        
-                        // Apply container boundary constraints to keep nodes within visible area
-                        nodeIds.forEach(nodeId => {
-                            const pos = positions[nodeId];
-                            if (!pos) return;
-                            
-                            // Apply boundary constraints exactly like in the demo's transform function
-                            let x = pos.x;
-                            let y = pos.y;
-                            
-                            x = x <= forcePadding ? forcePadding : 
-                                x >= width - forcePadding ? width - forcePadding : x;
-                            y = y <= forcePadding ? forcePadding : 
-                                y >= height - forcePadding ? height - forcePadding : y;
-                            
-                            // Move node if needed
-                            if (x !== pos.x || y !== pos.y) {
-                                network.moveNode(nodeId, x, y);
-                            }
-                        });
-                        
-                        // Set gentler physics for ongoing simulation
-                        network.setOptions({
-                            physics: {
-                                enabled: true,
-                                maxVelocity: 5,        // Reduce max velocity after layout
-                                minVelocity: 0.1,      // Gentle movement threshold
-                                stabilization: {
-                                    enabled: false     // Disable further full stabilization
-                                }
-                            }
-                        });
-                    }, 1000);
-                });
-                
-                // Set up search functionality
-                setupSearch(network, allNodes);
-                
-                // Set up filter buttons
-                setupFilters(network, allNodes, allEdges);
-                
-                // Set up layout buttons
-                setupLayouts(network);
-                
-                // Set up action buttons
-                setupActionButtons(network, container);
-
-                // Add connection type styling like in the demo
-                updateEdgesWithTypeStyles();
-            })
-            .catch(error => {
-                console.error('Error loading network data:', error);
-                container.innerHTML = `
-                    <div class="flex flex-col items-center justify-center h-full">
-                        <i class="fas fa-exclamation-triangle text-error text-4xl mb-4"></i>
-                        <h3 class="text-xl font-bold text-gray-800 mb-2">Error Loading Data</h3>
-                        <p class="text-gray-600">Failed to load network data: ${error.message}</p>
-                    </div>
-                `;
-            });
-        
-        // Setup search functionality
-        function setupSearch(network, nodes) {
-            const searchInput = document.getElementById('search-input');
-            searchInput.addEventListener('input', function(e) {
-                const searchTerm = e.target.value.toLowerCase();
-                
-                if (searchTerm === '') {
-                    // Reset all nodes to visible
-                    nodes.forEach(node => {
-                        nodes.update({ id: node.id, hidden: false });
-                    });
-                    return;
-                }
-                
-                // Hide nodes that don't match the search term
-                nodes.forEach(node => {
-                    const label = (node.label || '').toLowerCase();
-                    const title = (node.title || '').toLowerCase();
-                    const matches = label.includes(searchTerm) || title.includes(searchTerm);
-                    nodes.update({ id: node.id, hidden: !matches });
-                });
-            });
-        }
-        
-        // Setup filter buttons
-        function setupFilters(network, nodes, edges) {
-            const btnAll = document.getElementById('filter-all');
-            const btnMac = document.getElementById('filter-mac');
-            const btnIp = document.getElementById('filter-ip');
-            
-            btnAll.addEventListener('click', function() {
-                // Show all nodes
-                nodes.forEach(node => {
-                    nodes.update({ id: node.id, hidden: false });
-                });
-                
-                // Update button styles
-                updateFilterButtonStyles(btnAll);
-            });
-            
-            btnMac.addEventListener('click', function() {
-                // Show MAC nodes, hide IP nodes
-                nodes.forEach(node => {
-                    const isMac = node.group === 'mac';
-                    nodes.update({ id: node.id, hidden: !isMac });
-                });
-                
-                // Update button styles
-                updateFilterButtonStyles(btnMac);
-            });
-            
-            btnIp.addEventListener('click', function() {
-                // Show IP nodes, hide MAC nodes
-                nodes.forEach(node => {
-                    const isIp = node.group === 'ip';
-                    nodes.update({ id: node.id, hidden: !isIp });
-                });
-                
-                // Update button styles
-                updateFilterButtonStyles(btnIp);
-            });
-            
-            function updateFilterButtonStyles(activeButton) {
-                // Reset all button styles
-                [btnAll, btnMac, btnIp].forEach(btn => {
-                    btn.classList.remove('bg-primary', 'text-white');
-                    btn.classList.add('bg-gray-200', 'text-gray-800');
-                });
-                
-                // Set active button style
-                activeButton.classList.remove('bg-gray-200', 'text-gray-800');
-                activeButton.classList.add('bg-primary', 'text-white');
             }
         }
         
-        // Setup layout buttons
-        function setupLayouts(network) {
-            if (!network) {
-                console.warn("Network is not initialized in setupLayouts");
-                return;
-            }
-            
-            const btnHierarchical = document.getElementById('layout-hierarchical');
-            const btnPhysics = document.getElementById('layout-physics');
-            
-            // Hierarchical button handler
-            btnHierarchical.addEventListener('click', function() {
-                // Update button styles first
-                updateLayoutButtonStyles(btnHierarchical);
-                
-                console.log("Switching to Hierarchical view");
-                
-                // Explicitly enable hierarchical layout and disable physics
-                network.setOptions({
-                    physics: { 
-                        enabled: false 
-                    },
-                    layout: {
-                        hierarchical: {
-                            enabled: true,  // Explicitly enable hierarchical layout
-                            direction: 'LR',
-                            sortMethod: 'directed',
-                            nodeSpacing: 250,         // Increased node spacing
-                            levelSeparation: 300,     // Increased level separation
-                            treeSpacing: 200          // Added tree spacing
-                        }
-                    }
-                });
-            });
-            
-            // Force Directed button handler
-            btnPhysics.addEventListener('click', function() {
-                // Update button styles first
-                updateLayoutButtonStyles(btnPhysics);
-                
-                console.log("Switching to Disjoint Force-Directed view");
-                
-                if (!network) {
-                    console.warn("Network is not properly initialized");
-                    return;
-                }
-                
-                // First disable hierarchical layout explicitly, then enable physics
-                network.setOptions({
-                    layout: { 
-                        hierarchical: { 
-                            enabled: false  // Explicitly disable hierarchical layout
-                        } 
-                    }
-                });
-                
-                // Separate call to enable physics with D3-style configuration
-                network.setOptions({
-                    physics: {
-                        enabled: true,
-                        // D3-style physics configuration exactly matching the demo
-                        barnesHut: {
-                            gravitationalConstant: -200,      // Match the demo's forceManyBody().strength(-200)
-                            centralGravity: 0.01,             // Very weak central gravity like in D3
-                            springLength: 200,                // Match the demo's forceLink().distance(200)
-                            springConstant: 0.04,             // Moderate spring constant
-                            damping: 0.09,
-                            avoidOverlap: 1.0                 // Maximum avoidance (d3.forceCollide)
-                        },
-                        solver: 'barnesHut',
-                        stabilization: {
-                            enabled: true,
-                            iterations: 100,                  // Fewer iterations like in the demo
-                            updateInterval: 25,
-                            onlyDynamicEdges: false,
-                            fit: false                        // Don't fit to view to preserve positions
-                        },
-                        timestep: 0.5,                        // Like in the demo
-                        adaptiveTimestep: true
-                    }
-                });
-                
-                // Apply collision handling after a short delay to let physics start
-                setTimeout(function() {
-                    if (network) {
-                        try {
-                            applyCollisionHandling();
-                            updateEdgesWithTypeStyles(); // Apply edge styles to match the demo
-                            
-                            // After initial layout, set a more stable physics config
-                            setTimeout(function() {
-                                if (network) {
-                                    network.setOptions({
-                                        physics: {
-                                            enabled: true,
-                                            barnesHut: {
-                                                gravitationalConstant: -200,
-                                                centralGravity: 0.02,  // Slight increase for stability
-                                                springLength: 200,
-                                                springConstant: 0.04,
-                                                avoidOverlap: 1.0
-                                            },
-                                            timestep: 0.3,         // Reduced timestep for stability
-                                            maxVelocity: 10        // Lower velocity after initial layout
-                                        }
-                                    });
-                                }
-                            }, 3000);
-                        } catch (error) {
-                            console.error("Error applying disjoint force-directed layout:", error);
-                        }
-                    }
-                }, 1000);
-            });
-            
-            function updateLayoutButtonStyles(activeButton) {
-                // Reset all button styles
-                [btnHierarchical, btnPhysics].forEach(btn => {
-                    btn.classList.remove('bg-primary', 'text-white');
-                    btn.classList.add('bg-gray-200', 'text-gray-800');
-                });
-                
-                // Set active button style
-                activeButton.classList.remove('bg-gray-200', 'text-gray-800');
-                activeButton.classList.add('bg-primary', 'text-white');
-            }
-            
-            // Helper function to apply D3-style collision handling and boundary forces
-            function applyCollisionHandling() {
-                if (!network || typeof network.getNodeIds !== 'function') {
-                    console.warn("Network is not properly initialized or doesn't have getNodeIds method");
-                    return;
-                }
-                
-                try {
-                    const nodeIds = network.getNodeIds();
-                    if (!nodeIds || nodeIds.length === 0) {
-                        console.warn("No nodes to apply collision handling to");
-                        return;
-                    }
-                    
-                    const positions = network.getPositions(nodeIds);
-                    const containerRect = document.getElementById('network-container').getBoundingClientRect();
-                    
-                    // Get dimensions to apply boundary constraints
-                    const width = containerRect.width;
-                    const height = containerRect.height;
-                    const nodeRadius = 25;
-                    const forcePadding = nodeRadius + 10; // Same as in the demo
-
-                    console.log("Applying D3-style collision handling to", nodeIds.length, "nodes");
-                    
-                    // Apply container boundary constraints
-                    nodeIds.forEach(nodeId => {
-                        const pos = positions[nodeId];
-                        if (!pos) return;
-                        
-                        // Apply boundary constraints exactly like in the demo's transform function
-                        let x = pos.x;
-                        let y = pos.y;
-                        
-                        x = x <= forcePadding ? forcePadding : 
-                            x >= width - forcePadding ? width - forcePadding : x;
-                        y = y <= forcePadding ? forcePadding : 
-                            y >= height - forcePadding ? height - forcePadding : y;
-                        
-                        // Move node if position changed
-                        if (x !== pos.x || y !== pos.y) {
-                            network.moveNode(nodeId, x, y);
-                        }
-                    });
-                    
-                    // Enhance collision handling for overlapping nodes
-                    network.setOptions({
-                        physics: {
-                            barnesHut: {
-                                avoidOverlap: 1.0,
-                                gravitationalConstant: -200,  // Match exactly the demo's force settings
-                                springLength: 200,            // Match the demo's distance
-                                springConstant: 0.04,
-                                centralGravity: 0.01          // Very weak central gravity like in D3
-                            }
-                        }
-                    });
-                    
-                    // Add extra force application to spread nodes - similar to D3 demo
-                    setTimeout(() => {
-                        if (network) {
-                            // Apply a slight outward force from center
-                            const center = {
-                                x: width / 2,
-                                y: height / 2
-                            };
-                            
-                            nodeIds.forEach(nodeId => {
-                                const pos = network.getPositions([nodeId])[nodeId];
-                                if (!pos) return;
-                                
-                                // Calculate vector from center to node
-                                const dx = pos.x - center.x;
-                                const dy = pos.y - center.y;
-                                
-                                // Calculate distance from center
-                                const distance = Math.sqrt(dx * dx + dy * dy);
-                                
-                                if (distance > 0) {
-                                    // Normalize vector
-                                    const nx = dx / distance;
-                                    const ny = dy / distance;
-                                    
-                                    // Apply a small outward force
-                                    const forceMagnitude = 10;
-                                    network.moveNode(nodeId, pos.x + nx * forceMagnitude, pos.y + ny * forceMagnitude);
-                                }
-                            });
-                        }
-                    }, 1500);
-                } catch (error) {
-                    console.error("Error in applyCollisionHandling:", error);
-                }
-            }
-        }
-        
-        // Setup action buttons
-        function setupActionButtons(network, container) {
-            const btnFullscreen = document.getElementById('btn-fullscreen');
-            const btnExport = document.getElementById('btn-export');
-            
-            btnFullscreen.addEventListener('click', function() {
-                // Use the visualization-container for fullscreen
-                const visualizationContainer = document.getElementById('network-container');
-                if (!document.fullscreenElement) {
-                    visualizationContainer.requestFullscreen().catch(err => {
-                        console.error(`Error attempting to enable fullscreen: ${err.message}`);
-                    });
-                } else {
-                    document.exitFullscreen();
-                }
-            });
-            
-            btnExport.addEventListener('click', function() {
-                // Export the current network view as an image
-                const networkContainer = document.getElementById('network-container');
-                if (networkContainer) {
-                    html2canvas(networkContainer).then(canvas => {
-                        const imageData = canvas.toDataURL('image/png');
-                        const link = document.createElement('a');
-                        link.href = imageData;
-                        link.download = `network_visualization_${Date.now()}.png`;
-                        link.click();
-                    });
-                }
-            });
-        }
-        
-        // Fix: Update the resize function to use the correct container
-        function resizeNetwork() {
-            if (network && typeof network.setSize === 'function') {
-                // Calculate available height
-                const headerHeight = document.querySelector('header').offsetHeight;
-                const controlsHeight = document.querySelector('.compact-controls').offsetHeight;
-                const legendHeight = document.querySelector('.compact-legend').offsetHeight;
-                const footerHeight = document.querySelector('footer').offsetHeight;
-                const spacing = 30; // Extra spacing/margins
-                
-                // Calculate available height
-                const availableHeight = window.innerHeight - headerHeight - controlsHeight - legendHeight - footerHeight - spacing;
-                
-                // Set visualization container height
-                const visualizationContainer = document.getElementById('network-container');
-                visualizationContainer.style.height = `${availableHeight}px`;
-                
-                // Update network size
-                network.setSize('100%', '100%');
-                network.redraw();
-            } else {
-                console.warn("Network is not properly initialized or doesn't have setSize method");
-            }
-        }
-        
-        // Call resize on load and window resize
-        window.addEventListener('resize', resizeNetwork);
-
-        // Add connection type styling like in the demo
-        function updateEdgesWithTypeStyles() {
-            if (!allEdges || typeof allEdges.getIds !== 'function') {
-                console.warn("allEdges is not properly initialized or doesn't have getIds method");
+        // Apply final layout adjustments to improve node placement
+        function applyFinalLayoutAdjustment() {
+            if (!network || typeof network.getNodeIds !== 'function') {
+                console.warn("Cannot apply layout adjustment: network methods not available");
                 return;
             }
             
             try {
-                // Make sure we have edges before proceeding - check edge count properly
-                if (allEdges.get().length === 0) {
-                    console.warn("No edges to style");
+                const nodeIds = network.getNodeIds();
+                if (!nodeIds || !nodeIds.length) {
+                    console.warn("No nodes found for layout adjustment");
                     return;
                 }
-
-                const edgeIds = allEdges.getIds();
-                const updatedEdges = [];
                 
-                edgeIds.forEach(id => {
-                    const edge = allEdges.get(id);
-                    let edgeStyle = {};
+                const positions = network.getPositions(nodeIds);
+                
+                // Group nodes by type
+                const ipNodes = allNodes.get().filter(node => node.group === 'ip').map(node => node.id);
+                const macNodes = allNodes.get().filter(node => node.group === 'mac').map(node => node.id);
+                
+                // Scale positions outward by different factors based on node type
+                for (const nodeId of nodeIds) {
+                    const pos = positions[nodeId];
+                    if (!pos) continue;
                     
-                    // Set edge label based on connection type like in the demo
-                    // Extract the connection type from the title
-                    let label = '';
-                    if (edge.title) {
-                        if (edge.title.includes("Accepted")) {
-                            label = 'request-accepted';
-                        } else if (edge.title.includes("Response")) {
-                            label = 'response';
-                        } else if (edge.title.includes("Rejected")) {
-                            label = 'request-rejected';
-                        }
-                    }
-                    
-                    // Set color and style based on connection type exactly like the demo
-                    if (edge.title && edge.title.includes("Accepted")) {
-                        edgeStyle = {
-                            id: id,
-                            label: label,
-                            font: {
-                                size: 10,
-                                face: 'Roboto Condensed',
-                                color: '#66c2a5',
-                                strokeWidth: 4,
-                                strokeColor: '#ffffff',
-                                align: 'middle'
-                            },
-                            color: { color: '#66c2a5', highlight: '#66c2a5', hover: '#66c2a5' }, // Same green color as demo
-                            arrows: { to: { enabled: true } }
-                        };
-                    } else if (edge.title && edge.title.includes("Response")) {
-                        edgeStyle = {
-                            id: id,
-                            label: label,
-                            font: {
-                                size: 10,
-                                face: 'Roboto Condensed',
-                                color: '#8da0cb',
-                                strokeWidth: 4,
-                                strokeColor: '#ffffff',
-                                align: 'middle'
-                            },
-                            color: { color: '#8da0cb', highlight: '#8da0cb', hover: '#8da0cb' }, // Same blue color as demo
-                            dashes: [2, 2], // Use dashed lines for response edges like the demo
-                            arrows: { to: { enabled: true } }
-                        };
-                    } else if (edge.title && edge.title.includes("Rejected")) {
-                        edgeStyle = {
-                            id: id,
-                            label: label,
-                            font: {
-                                size: 10,
-                                face: 'Roboto Condensed',
-                                color: '#fc8d62',
-                                strokeWidth: 4,
-                                strokeColor: '#ffffff',
-                                align: 'middle'
-                            },
-                            color: { color: '#fc8d62', highlight: '#fc8d62', hover: '#fc8d62' }, // Same orange/red color as demo
-                            arrows: { to: { enabled: true } }
-                        };
+                    if (ipNodes.includes(nodeId)) {
+                        // IP nodes get expanded more (40% scaling)
+                        network.moveNode(nodeId, pos.x * 1.4, pos.y * 1.4);
                     } else {
-                        // Default style for other connections
-                        edgeStyle = {
-                            id: id,
-                            label: '',
-                            color: { color: '#666', highlight: '#444', hover: '#444' },
-                            arrows: { to: { enabled: true } }
-                        };
+                        // MAC nodes get normal expansion (20% scaling)
+                        network.moveNode(nodeId, pos.x * 1.2, pos.y * 1.2);
                     }
-                    
-                    updatedEdges.push(edgeStyle);
-                });
+                }
                 
-                // Update all edges at once for better performance
-                allEdges.update(updatedEdges);
-            } catch (error) {
-                console.error("Error in updateEdgesWithTypeStyles:", error);
+                // Disable physics after stabilization
+                network.setOptions({ physics: { enabled: false } });
+                
+                console.log("Applied final layout adjustment");
+            } catch (err) {
+                console.error("Error applying layout adjustment:", err);
             }
         }
+        
+        // Perform search on node data
+        function performSearch() {
+            if (!network || typeof network.getNodeIds !== 'function' || !allNodes) {
+                console.warn("Search functionality unavailable: network not properly initialized");
+                return;
+            }
+            
+            const searchInput = document.getElementById('search-input');
+            if (!searchInput) return;
+            
+            const searchTerm = searchInput.value.trim().toLowerCase();
+            if (!searchTerm) return;
+            
+            console.log("Searching for:", searchTerm);
+            
+            try {
+                // Get all nodes
+                const nodeIds = network.getNodeIds();
+                const foundNodes = [];
+                
+                // Search through nodes
+                nodeIds.forEach(id => {
+                    const node = allNodes.get(id);
+                    if (node && node.label && node.label.toLowerCase().includes(searchTerm)) {
+                        foundNodes.push(id);
+                    }
+                });
+                
+                if (foundNodes.length > 0) {
+                    // Focus on the first match
+                    network.focus(foundNodes[0], {
+                        scale: 1.2,
+                        animation: true
+                    });
+                    network.selectNodes(foundNodes);
+                    
+                    // Highlight the found nodes
+                    const updatedNodes = foundNodes.map(id => {
+                        const node = allNodes.get(id);
+                        if (!node) return null;
+                        
+                        const originalColor = node.color ? { ...node.color } : null;
+                        
+                        return {
+                            id: id,
+                            color: {
+                                background: '#FFFF00',
+                                border: '#FFA500',
+                                highlight: {
+                                    background: '#FFFF00',
+                                    border: '#FFA500'
+                                },
+                                _originalColor: originalColor
+                            }
+                        };
+                    }).filter(node => node !== null);
+                    
+                    allNodes.update(updatedNodes);
+                    
+                    // Reset highlight after a delay
+                    setTimeout(() => {
+                        const resetNodes = foundNodes.map(id => {
+                            const node = allNodes.get(id);
+                            if (!node) return null;
+                            
+                            return {
+                                id: id,
+                                color: node.color._originalColor
+                            };
+                        }).filter(node => node !== null);
+                        
+                        allNodes.update(resetNodes);
+                    }, 3000);
+                    
+                    console.log(`Found ${foundNodes.length} nodes matching "${searchTerm}"`);
+                } else {
+                    console.log(`No nodes found matching "${searchTerm}"`);
+                    alert(`No nodes found matching "${searchTerm}"`);
+                }
+            } catch (err) {
+                console.error("Error during search:", err);
+            }
+        }
+        
+        // Handle layout changes
+        const layoutHierarchicalBtn = document.getElementById('layout-hierarchical');
+        const layoutPhysicsBtn = document.getElementById('layout-physics');
+        
+        if (layoutHierarchicalBtn) {
+            layoutHierarchicalBtn.addEventListener('click', function() {
+                if (!network) return;
+                applyHierarchicalLayout();
+            });
+        }
+        
+        if (layoutPhysicsBtn) {
+            layoutPhysicsBtn.addEventListener('click', function() {
+                if (!network) return;
+                applyForceDirectedLayout();
+            });
+        }
+        
+        // Handle window resize
+        function resizeNetwork() {
+            if (!network || typeof network.setSize !== 'function') {
+                console.warn("Network is not properly initialized or doesn't have setSize method");
+                return;
+            }
+            
+            const container = document.getElementById('network-container');
+            if (!container) return;
+            
+            const width = container.offsetWidth;
+            const height = container.offsetHeight;
+            
+            if (width > 0 && height > 0) {
+                try {
+                    network.setSize(`${width}px`, `${height}px`);
+                    network.fit();
+                } catch (err) {
+                    console.error("Error resizing network:", err);
+                }
+            }
+        }
+        
+        // Apply hierarchical layout
+        function applyHierarchicalLayout() {
+            if (!network) return;
+            
+            console.log("Switching to Hierarchical view");
+            
+            try {
+                // Set up hierarchical layout
+                network.setOptions({
+                    layout: {
+                        hierarchical: {
+                            direction: 'UD',
+                            sortMethod: 'directed',
+                            nodeSpacing: 150,
+                            treeSpacing: 200
+                        }
+                    },
+                    physics: {
+                        enabled: true,
+                        hierarchicalRepulsion: {
+                            centralGravity: 0.2,
+                            springLength: 150,
+                            springConstant: 0.01,
+                            nodeDistance: 120,
+                            damping: 0.09
+                        },
+                        solver: 'hierarchicalRepulsion',
+                        stabilization: {
+                            enabled: true,
+                            iterations: 1000,
+                            updateInterval: 100
+                        }
+                    }
+                });
+                
+                // Highlight the active button
+                document.getElementById('layout-hierarchical').classList.remove('bg-gray-200');
+                document.getElementById('layout-hierarchical').classList.add('bg-primary', 'text-white');
+                document.getElementById('layout-physics').classList.remove('bg-primary', 'text-white');
+                document.getElementById('layout-physics').classList.add('bg-gray-200', 'text-gray-800');
+            } catch (err) {
+                console.error("Error applying hierarchical layout:", err);
+            }
+        }
+        
+        // Apply force-directed layout
+        function applyForceDirectedLayout() {
+            if (!network) return;
+            
+            console.log("Switching to Disjoint Force-Directed view");
+            
+            try {
+                // Disable hierarchical layout and apply force-directed
+                network.setOptions({
+                    layout: {
+                        hierarchical: false,
+                        improvedLayout: true
+                    },
+                    physics: {
+                        enabled: true,
+                        barnesHut: {
+                            gravitationalConstant: -2000,
+                            centralGravity: 0.3,
+                            springLength: 150,
+                            springConstant: 0.04,
+                            damping: 0.09,
+                            avoidOverlap: 1.0
+                        },
+                        solver: 'barnesHut',
+                        stabilization: {
+                            enabled: true,
+                            iterations: 1000,
+                            updateInterval: 100
+                        }
+                    }
+                });
+                
+                // Highlight the active button
+                document.getElementById('layout-physics').classList.remove('bg-gray-200');
+                document.getElementById('layout-physics').classList.add('bg-primary', 'text-white');
+                document.getElementById('layout-hierarchical').classList.remove('bg-primary', 'text-white');
+                document.getElementById('layout-hierarchical').classList.add('bg-gray-200', 'text-gray-800');
+                
+                // Apply force-directed layout
+                console.log("Rendering force-directed layout");
+                network.startSimulation();
+            } catch (err) {
+                console.error("Error applying force-directed layout:", err);
+            }
+        }
+        
+        // Handle fullscreen button
+        const fullscreenBtn = document.getElementById('btn-fullscreen');
+        if (fullscreenBtn) {
+            fullscreenBtn.addEventListener('click', function() {
+                const container = document.getElementById('network-container');
+                if (!container) return;
+                
+                if (!document.fullscreenElement) {
+                    if (container.requestFullscreen) {
+                        container.requestFullscreen();
+                    } else if (container.mozRequestFullScreen) {
+                        container.mozRequestFullScreen();
+                    } else if (container.webkitRequestFullscreen) {
+                        container.webkitRequestFullscreen();
+                    } else if (container.msRequestFullscreen) {
+                        container.msRequestFullscreen();
+                    }
+                } else {
+                    if (document.exitFullscreen) {
+                        document.exitFullscreen();
+                    } else if (document.mozCancelFullScreen) {
+                        document.mozCancelFullScreen();
+                    } else if (document.webkitExitFullscreen) {
+                        document.webkitExitFullscreen();
+                    } else if (document.msExitFullscreen) {
+                        document.msExitFullscreen();
+                    }
+                }
+            });
+        }
+        
+        // Handle window resize event
+        window.addEventListener('resize', function() {
+            resizeNetwork();
+        });
+        
+        // Listen for fullscreen change to resize network
+        document.addEventListener('fullscreenchange', resizeNetwork);
+        document.addEventListener('webkitfullscreenchange', resizeNetwork);
+        document.addEventListener('mozfullscreenchange', resizeNetwork);
+        document.addEventListener('MSFullscreenChange', resizeNetwork);
     });
 </script>
 
