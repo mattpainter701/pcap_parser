@@ -142,21 +142,20 @@ def parse_json_file(file_path):
 
 @app.route('/')
 def index():
-    # Get list of CSV and JSON files in the outputs directory - refresh on each request
+    # Get list of JSON files in the outputs directory - refresh on each request
     files = []
     # Ensure the directory exists
     os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
     
     for filename in os.listdir(app.config['UPLOAD_FOLDER']):
-        if filename.endswith(('.csv', '.json')):
+        if filename.endswith('.json'):  # Only include JSON files
             file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
             if os.path.isfile(file_path):  # Extra check to ensure it's a file
-                file_type = 'json' if filename.endswith('.json') else 'csv'
                 files.append({
                     'name': filename,
                     'path': file_path,
                     'date': os.path.getmtime(file_path),
-                    'type': file_type
+                    'type': 'json'
                 })
     
     # Sort by date, newest first
@@ -211,7 +210,8 @@ def upload_file():
         return redirect(url_for('index'))
     
     file = request.files['file']
-    if file.filename == '' or not allowed_file(file.filename):
+    # Only allow JSON files
+    if file.filename == '' or not file.filename.lower().endswith('.json'):
         return redirect(url_for('index'))
     
     # Ensure upload directory exists

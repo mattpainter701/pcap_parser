@@ -184,152 +184,26 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 
 <script>
-    // Make network, allNodes, and allEdges available in the global scope for all functions
-    let network = null;
-    let allNodes = null;
-    let allEdges = null;
-    
     document.addEventListener('DOMContentLoaded', function() {
         // Initialize datasets - use empty arrays initially
-        allNodes = new vis.DataSet([]);
-        allEdges = new vis.DataSet([]);
+        let allNodes = null; 
+        let allEdges = null;
+        let network = null;
+        
+        // Make these variables globally accessible
+        window.allNodes = allNodes;
+        window.allEdges = allEdges;
+        window.network = network;
         
         // Fix: Get the correct container element
         const container = document.getElementById('network');
-        
-        // Define different node groups with distinctive styles
-        const groups = {
-            mac: {
-                color: {
-                    background: '#ddd',  // Light gray fill like in the demo
-                    border: '#666',      // Dark gray border like in the demo
-                    highlight: {
-                        background: '#ccc',
-                        border: '#444'
-                    }
-                },
-                font: {
-                    color: '#000000',
-                    size: 10,            // Smaller font like in the demo
-                    face: 'Roboto Condensed'  // Font family used in the demo
-                },
-                borderWidth: 1,          // Thinner border like in the demo
-                shape: 'circle',         // Circle shape like in the demo
-                size: 25                 // Same size as in the demo (nodeRadius = 25)
-            },
-            ip: {
-                color: {
-                    background: '#ddd',  // Light gray fill like in the demo
-                    border: '#666',      // Dark gray border like in the demo
-                    highlight: {
-                        background: '#ccc',
-                        border: '#444'
-                    }
-                },
-                font: {
-                    color: '#000000',
-                    size: 10,            // Smaller font like in the demo
-                    face: 'Roboto Condensed'  // Font family used in the demo
-                },
-                borderWidth: 1,          // Thinner border like in the demo
-                shape: 'circle',         // Circle shape like in the demo
-                size: 25,                // Same size as in the demo (nodeRadius = 25)
-                margin: 10               // Less margin to match the demo
-            }
-        };
-        
-        // Edge styling
-        const edgesOptions = {
-            color: {
-                color: '#666',           // Gray color like in the demo
-                highlight: '#444',
-                hover: '#444'
-            },
-            width: 1.5,                  // Thinner edges like in the demo (stroke-width: 1.5px)
-            font: {
-                align: 'middle',
-                size: 10,
-                face: 'Roboto Condensed', // Font family used in the demo
-                strokeWidth: 4,           // Text shadow effect like in the demo
-                strokeColor: '#ffffff'    // White text shadow like in the demo
-            },
-            selectionWidth: 2,
-            smooth: {
-                type: 'straightCross',    // Straight lines like in the demo's "L" path
-                roundness: 0
-            }
-        };
-        
-        // Network visualization options
-        const options = {
-            nodes: {
-                font: {
-                    size: 12,
-                    face: 'Roboto'
-                },
-                margin: 10,
-                shape: 'box',
-                scaling: {
-                    min: 16,
-                    max: 32
-                }
-            },
-            edges: edgesOptions,
-            groups: groups,
-            physics: {
-                enabled: true,
-                // D3-style physics configuration as default
-                barnesHut: {
-                    gravitationalConstant: -2000,     // Similar to d3.forceManyBody().strength(-200)
-                    centralGravity: 0.01,             // Weak central gravity like in D3
-                    springLength: 200,                // Similar to d3.forceLink().distance(200)
-                    springConstant: 0.04,             // Moderate spring constant
-                    damping: 0.09,
-                    avoidOverlap: 1.0                 // Maximum avoidance (d3.forceCollide)
-                },
-                solver: 'barnesHut',
-                stabilization: {
-                    enabled: true,
-                    iterations: 250,                  // More iterations for better stability
-                    updateInterval: 25,
-                    onlyDynamicEdges: false,
-                    fit: true
-                },
-                timestep: 0.3,                        // Smaller timestep for more stable simulation
-                adaptiveTimestep: true,
-                maxVelocity: 50,                      // Allow higher velocity initially (d3.alphaTarget(0.3))
-                minVelocity: 0.15                     // Lower minimum velocity (d3's low friction)
-            },
-            interaction: {
-                hover: true,
-                tooltipDelay: 200,
-                navigationButtons: true,
-                keyboard: true,
-                zoomView: true
-            },
-            layout: {
-                randomSeed: 1,
-                improvedLayout: true,
-                clusterThreshold: 150             // Better clustering behavior
-            }
-        };
-        
-        // Create an initial empty network with empty datasets
-        const networkData = {
-            nodes: allNodes,
-            edges: allEdges
-        };
-        
-        // Initialize the network with empty data to ensure it exists
-        if (container) {
-            network = new vis.Network(container, networkData, options);
-            console.log("Network initialized with empty data");
-        } else {
-            console.error("Network container not found!");
+        if (!container) {
+            console.error("Network container element not found");
             return;
         }
         
-        // Load the network data from the API
+        // Load the network data from the API first
+        console.log("Fetching network data for {{ filename }}");
         fetch(`/api/network_data/{{ filename }}`)
             .then(response => {
                 if (!response.ok) {
@@ -346,48 +220,183 @@
                         throw new Error("Invalid data format received from server");
                     }
                     
-                    // Clear existing data
-                    allNodes.clear();
-                    allEdges.clear();
+                    // IMPORTANT: Create new DataSet objects with the data
+                    window.allNodes = new vis.DataSet(data.nodes);
+                    window.allEdges = new vis.DataSet(data.edges);
                     
-                    // Add the new data
-                    allNodes.add(data.nodes);
-                    allEdges.add(data.edges);
+                    // Define different node groups with distinctive styles
+                    const groups = {
+                        mac: {
+                            color: {
+                                background: '#ddd',
+                                border: '#666',
+                                highlight: {
+                                    background: '#ccc',
+                                    border: '#444'
+                                }
+                            },
+                            font: {
+                                color: '#000000',
+                                size: 10,
+                                face: 'Roboto Condensed'
+                            },
+                            borderWidth: 1,
+                            shape: 'circle',
+                            size: 25
+                        },
+                        ip: {
+                            color: {
+                                background: '#ddd',
+                                border: '#666',
+                                highlight: {
+                                    background: '#ccc',
+                                    border: '#444'
+                                }
+                            },
+                            font: {
+                                color: '#000000',
+                                size: 10,
+                                face: 'Roboto Condensed'
+                            },
+                            borderWidth: 1,
+                            shape: 'circle',
+                            size: 25,
+                            margin: 10
+                        }
+                    };
                     
-                    console.log(`Loaded ${allNodes.length} nodes and ${allEdges.length} edges`);
+                    // Edge styling
+                    const edgesOptions = {
+                        color: {
+                            color: '#666',
+                            highlight: '#444',
+                            hover: '#444'
+                        },
+                        width: 1.5,
+                        font: {
+                            align: 'middle',
+                            size: 10,
+                            face: 'Roboto Condensed',
+                            strokeWidth: 4,
+                            strokeColor: '#ffffff'
+                        },
+                        selectionWidth: 2,
+                        smooth: {
+                            type: 'straightCross',
+                            roundness: 0
+                        }
+                    };
                     
-                    // Update the network with new data
-                    network.setData({
-                        nodes: allNodes,
-                        edges: allEdges
-                    });
+                    // Network visualization options
+                    const options = {
+                        nodes: {
+                            font: {
+                                size: 12,
+                                face: 'Roboto'
+                            },
+                            margin: 10,
+                            shape: 'box',
+                            scaling: {
+                                min: 16,
+                                max: 32
+                            }
+                        },
+                        edges: edgesOptions,
+                        groups: groups,
+                        physics: {
+                            enabled: true,
+                            barnesHut: {
+                                gravitationalConstant: -2000,
+                                centralGravity: 0.01,
+                                springLength: 200,
+                                springConstant: 0.04,
+                                damping: 0.09,
+                                avoidOverlap: 1.0
+                            },
+                            solver: 'barnesHut',
+                            stabilization: {
+                                enabled: true,
+                                iterations: 250,
+                                updateInterval: 25,
+                                onlyDynamicEdges: false,
+                                fit: true
+                            },
+                            timestep: 0.3,
+                            adaptiveTimestep: true,
+                            maxVelocity: 50,
+                            minVelocity: 0.15
+                        },
+                        interaction: {
+                            hover: true,
+                            tooltipDelay: 200,
+                            navigationButtons: true,
+                            keyboard: true,
+                            zoomView: true
+                        },
+                        layout: {
+                            randomSeed: 1,
+                            improvedLayout: true,
+                            clusterThreshold: 150
+                        }
+                    };
+
+                    // Create network data with proper DataSet objects
+                    const networkData = {
+                        nodes: window.allNodes,
+                        edges: window.allEdges
+                    };
                     
-                    console.log("Network is ready, applying default layout");
+                    console.log(`Creating network with ${window.allNodes.length} nodes and ${window.allEdges.length} edges`);
+                    
+                    // Initialize the network
+                    window.network = new vis.Network(container, networkData, options);
+                    console.log("Network initialized successfully");
+                    
+                    // Setup event handlers
+                    setupNetworkEvents();
+                    
+                    // Apply the default layout after a short delay
+                    setTimeout(() => {
+                        const btnPhysics = document.getElementById('layout-physics');
+                        if (btnPhysics) {
+                            btnPhysics.click();
+                        }
+                    }, 500);
                     
                 } catch (err) {
                     console.error("Error setting up network data:", err);
+                    container.innerHTML = `
+                        <div class="flex flex-col items-center justify-center h-full p-4">
+                            <div class="text-red-500 text-xl mb-4">❌ Error Loading Visualization</div>
+                            <div class="text-gray-700 mb-2">${err.message}</div>
+                            <div class="text-gray-500 text-sm">Please check the console for more details.</div>
+                        </div>
+                    `;
                 }
-                
-                // Register network events only after data is loaded
-                setupNetworkEvents();
-                
             })
             .catch(error => {
                 console.error("Error fetching network data:", error);
+                container.innerHTML = `
+                    <div class="flex flex-col items-center justify-center h-full p-4">
+                        <div class="text-red-500 text-xl mb-4">❌ Error Loading Data</div>
+                        <div class="text-gray-700 mb-2">${error.message}</div>
+                        <div class="text-gray-500 text-sm">Please check that the file exists and is in the correct format.</div>
+                    </div>
+                `;
             });
             
         // Setup all network event handlers
         function setupNetworkEvents() {
-            if (!network) {
+            if (!window.network) {
                 console.error("Cannot setup events: network not initialized");
                 return;
             }
             
             // Double-click event
-            network.on("doubleClick", function(params) {
+            window.network.on("doubleClick", function(params) {
                 if (params.nodes && params.nodes.length > 0) {
                     // Focus on the selected node
-                    network.focus(params.nodes[0], {
+                    window.network.focus(params.nodes[0], {
                         scale: 1.2,
                         animation: true
                     });
@@ -395,11 +404,11 @@
             });
             
             // Stabilization complete event
-            network.once("stabilizationIterationsDone", function() {
+            window.network.once("stabilizationIterationsDone", function() {
                 console.log("Network stabilized");
                 
                 // Safely check if methods exist before calling them
-                if (network && typeof network.getNodeIds === 'function') {
+                if (window.network && typeof window.network.getNodeIds === 'function') {
                     // Apply a final layout adjustment to spread nodes further
                     applyFinalLayoutAdjustment();
                 } else {
@@ -425,27 +434,87 @@
                     }
                 });
             }
+            
+            // Handle layout changes
+            const layoutHierarchicalBtn = document.getElementById('layout-hierarchical');
+            const layoutPhysicsBtn = document.getElementById('layout-physics');
+            
+            if (layoutHierarchicalBtn) {
+                layoutHierarchicalBtn.addEventListener('click', function() {
+                    if (!window.network) return;
+                    applyHierarchicalLayout();
+                });
+            }
+            
+            if (layoutPhysicsBtn) {
+                layoutPhysicsBtn.addEventListener('click', function() {
+                    if (!window.network) return;
+                    applyForceDirectedLayout();
+                });
+            }
+            
+            // Handle fullscreen button
+            const fullscreenBtn = document.getElementById('btn-fullscreen');
+            if (fullscreenBtn) {
+                fullscreenBtn.addEventListener('click', function() {
+                    const container = document.getElementById('network-container');
+                    if (!container) return;
+                    
+                    if (!document.fullscreenElement) {
+                        if (container.requestFullscreen) {
+                            container.requestFullscreen();
+                        } else if (container.mozRequestFullScreen) {
+                            container.mozRequestFullScreen();
+                        } else if (container.webkitRequestFullscreen) {
+                            container.webkitRequestFullscreen();
+                        } else if (container.msRequestFullscreen) {
+                            container.msRequestFullscreen();
+                        }
+                    } else {
+                        if (document.exitFullscreen) {
+                            document.exitFullscreen();
+                        } else if (document.mozCancelFullScreen) {
+                            document.mozCancelFullScreen();
+                        } else if (document.webkitExitFullscreen) {
+                            document.webkitExitFullscreen();
+                        } else if (document.msExitFullscreen) {
+                            document.msExitFullscreen();
+                        }
+                    }
+                });
+            }
+            
+            // Handle window resize event
+            window.addEventListener('resize', function() {
+                resizeNetwork();
+            });
+            
+            // Listen for fullscreen change to resize network
+            document.addEventListener('fullscreenchange', resizeNetwork);
+            document.addEventListener('webkitfullscreenchange', resizeNetwork);
+            document.addEventListener('mozfullscreenchange', resizeNetwork);
+            document.addEventListener('MSFullscreenChange', resizeNetwork);
         }
         
         // Apply final layout adjustments to improve node placement
         function applyFinalLayoutAdjustment() {
-            if (!network || typeof network.getNodeIds !== 'function') {
+            if (!window.network || typeof window.network.getNodeIds !== 'function') {
                 console.warn("Cannot apply layout adjustment: network methods not available");
                 return;
             }
             
             try {
-                const nodeIds = network.getNodeIds();
+                const nodeIds = window.network.getNodeIds();
                 if (!nodeIds || !nodeIds.length) {
                     console.warn("No nodes found for layout adjustment");
                     return;
                 }
                 
-                const positions = network.getPositions(nodeIds);
+                const positions = window.network.getPositions(nodeIds);
                 
                 // Group nodes by type
-                const ipNodes = allNodes.get().filter(node => node.group === 'ip').map(node => node.id);
-                const macNodes = allNodes.get().filter(node => node.group === 'mac').map(node => node.id);
+                const ipNodes = window.allNodes.get().filter(node => node.group === 'ip').map(node => node.id);
+                const macNodes = window.allNodes.get().filter(node => node.group === 'mac').map(node => node.id);
                 
                 // Scale positions outward by different factors based on node type
                 for (const nodeId of nodeIds) {
@@ -454,15 +523,15 @@
                     
                     if (ipNodes.includes(nodeId)) {
                         // IP nodes get expanded more (40% scaling)
-                        network.moveNode(nodeId, pos.x * 1.4, pos.y * 1.4);
+                        window.network.moveNode(nodeId, pos.x * 1.4, pos.y * 1.4);
                     } else {
                         // MAC nodes get normal expansion (20% scaling)
-                        network.moveNode(nodeId, pos.x * 1.2, pos.y * 1.2);
+                        window.network.moveNode(nodeId, pos.x * 1.2, pos.y * 1.2);
                     }
                 }
                 
                 // Disable physics after stabilization
-                network.setOptions({ physics: { enabled: false } });
+                window.network.setOptions({ physics: { enabled: false } });
                 
                 console.log("Applied final layout adjustment");
             } catch (err) {
@@ -472,7 +541,7 @@
         
         // Perform search on node data
         function performSearch() {
-            if (!network || typeof network.getNodeIds !== 'function' || !allNodes) {
+            if (!window.network || typeof window.network.getNodeIds !== 'function' || !window.allNodes) {
                 console.warn("Search functionality unavailable: network not properly initialized");
                 return;
             }
@@ -487,12 +556,12 @@
             
             try {
                 // Get all nodes
-                const nodeIds = network.getNodeIds();
+                const nodeIds = window.network.getNodeIds();
                 const foundNodes = [];
                 
                 // Search through nodes
                 nodeIds.forEach(id => {
-                    const node = allNodes.get(id);
+                    const node = window.allNodes.get(id);
                     if (node && node.label && node.label.toLowerCase().includes(searchTerm)) {
                         foundNodes.push(id);
                     }
@@ -500,15 +569,15 @@
                 
                 if (foundNodes.length > 0) {
                     // Focus on the first match
-                    network.focus(foundNodes[0], {
+                    window.network.focus(foundNodes[0], {
                         scale: 1.2,
                         animation: true
                     });
-                    network.selectNodes(foundNodes);
+                    window.network.selectNodes(foundNodes);
                     
                     // Highlight the found nodes
                     const updatedNodes = foundNodes.map(id => {
-                        const node = allNodes.get(id);
+                        const node = window.allNodes.get(id);
                         if (!node) return null;
                         
                         const originalColor = node.color ? { ...node.color } : null;
@@ -527,12 +596,12 @@
                         };
                     }).filter(node => node !== null);
                     
-                    allNodes.update(updatedNodes);
+                    window.allNodes.update(updatedNodes);
                     
                     // Reset highlight after a delay
                     setTimeout(() => {
                         const resetNodes = foundNodes.map(id => {
-                            const node = allNodes.get(id);
+                            const node = window.allNodes.get(id);
                             if (!node) return null;
                             
                             return {
@@ -541,7 +610,7 @@
                             };
                         }).filter(node => node !== null);
                         
-                        allNodes.update(resetNodes);
+                        window.allNodes.update(resetNodes);
                     }, 3000);
                     
                     console.log(`Found ${foundNodes.length} nodes matching "${searchTerm}"`);
@@ -554,56 +623,15 @@
             }
         }
         
-        // Handle layout changes
-        const layoutHierarchicalBtn = document.getElementById('layout-hierarchical');
-        const layoutPhysicsBtn = document.getElementById('layout-physics');
-        
-        if (layoutHierarchicalBtn) {
-            layoutHierarchicalBtn.addEventListener('click', function() {
-                if (!network) return;
-                applyHierarchicalLayout();
-            });
-        }
-        
-        if (layoutPhysicsBtn) {
-            layoutPhysicsBtn.addEventListener('click', function() {
-                if (!network) return;
-                applyForceDirectedLayout();
-            });
-        }
-        
-        // Handle window resize
-        function resizeNetwork() {
-            if (!network || typeof network.setSize !== 'function') {
-                console.warn("Network is not properly initialized or doesn't have setSize method");
-                return;
-            }
-            
-            const container = document.getElementById('network-container');
-            if (!container) return;
-            
-            const width = container.offsetWidth;
-            const height = container.offsetHeight;
-            
-            if (width > 0 && height > 0) {
-                try {
-                    network.setSize(`${width}px`, `${height}px`);
-                    network.fit();
-                } catch (err) {
-                    console.error("Error resizing network:", err);
-                }
-            }
-        }
-        
         // Apply hierarchical layout
         function applyHierarchicalLayout() {
-            if (!network) return;
+            if (!window.network) return;
             
             console.log("Switching to Hierarchical view");
             
             try {
                 // Set up hierarchical layout
-                network.setOptions({
+                window.network.setOptions({
                     layout: {
                         hierarchical: {
                             direction: 'UD',
@@ -642,13 +670,13 @@
         
         // Apply force-directed layout
         function applyForceDirectedLayout() {
-            if (!network) return;
+            if (!window.network) return;
             
             console.log("Switching to Disjoint Force-Directed view");
             
             try {
                 // Disable hierarchical layout and apply force-directed
-                network.setOptions({
+                window.network.setOptions({
                     layout: {
                         hierarchical: false,
                         improvedLayout: true
@@ -680,90 +708,44 @@
                 
                 // Apply force-directed layout
                 console.log("Rendering force-directed layout");
-                network.startSimulation();
+                
+                // Force a redraw instead of startSimulation (which doesn't exist)
+                if (window.network) {
+                    try {
+                        window.network.redraw();
+                        // Re-enable physics which will start the simulation
+                        window.network.setOptions({ physics: { enabled: true } });
+                    } catch (err) {
+                        console.error("Error redrawing network:", err);
+                    }
+                }
             } catch (err) {
                 console.error("Error applying force-directed layout:", err);
             }
         }
         
-        // Handle fullscreen button
-        const fullscreenBtn = document.getElementById('btn-fullscreen');
-        if (fullscreenBtn) {
-            fullscreenBtn.addEventListener('click', function() {
-                const container = document.getElementById('network-container');
-                if (!container) return;
-                
-                if (!document.fullscreenElement) {
-                    if (container.requestFullscreen) {
-                        container.requestFullscreen();
-                    } else if (container.mozRequestFullScreen) {
-                        container.mozRequestFullScreen();
-                    } else if (container.webkitRequestFullscreen) {
-                        container.webkitRequestFullscreen();
-                    } else if (container.msRequestFullscreen) {
-                        container.msRequestFullscreen();
-                    }
-                } else {
-                    if (document.exitFullscreen) {
-                        document.exitFullscreen();
-                    } else if (document.mozCancelFullScreen) {
-                        document.mozCancelFullScreen();
-                    } else if (document.webkitExitFullscreen) {
-                        document.webkitExitFullscreen();
-                    } else if (document.msExitFullscreen) {
-                        document.msExitFullscreen();
-                    }
-                }
-            });
-        }
-        
-        // Handle window resize event
-        window.addEventListener('resize', function() {
-            resizeNetwork();
-        });
-        
-        // Listen for fullscreen change to resize network
-        document.addEventListener('fullscreenchange', resizeNetwork);
-        document.addEventListener('webkitfullscreenchange', resizeNetwork);
-        document.addEventListener('mozfullscreenchange', resizeNetwork);
-        document.addEventListener('MSFullscreenChange', resizeNetwork);
-    });
-</script>
-
-<script>
-  document.addEventListener("DOMContentLoaded", function() {
-    const btnPhysics = document.getElementById('layout-physics');
-    
-    // Create a function to check if network is ready and then apply the layout
-    function tryApplyDefaultLayout() {
-        if (network && typeof network.setOptions === 'function') {
-            console.log("Network is ready, applying default layout");
-            if (btnPhysics) {
-                // Make sure to handle any errors during default layout application
-                try {
-                    btnPhysics.click();
-                } catch (error) {
-                    console.error("Error applying default layout:", error);
-                }
+        // Handle window resize
+        function resizeNetwork() {
+            if (!window.network || typeof window.network.setSize !== 'function') {
+                console.warn("Network is not properly initialized or doesn't have setSize method");
+                return;
             }
-        } else {
-            console.log("Waiting for network to initialize...");
-            // Limit retry attempts to avoid infinite loop
-            if (window.networkInitAttempts === undefined) {
-                window.networkInitAttempts = 0;
-            }
-            window.networkInitAttempts++;
             
-            if (window.networkInitAttempts < 20) { // Limit to 10 seconds (20 * 500ms)
-                setTimeout(tryApplyDefaultLayout, 500);
-            } else {
-                console.error("Failed to initialize network after multiple attempts");
+            const container = document.getElementById('network-container');
+            if (!container) return;
+            
+            const width = container.offsetWidth;
+            const height = container.offsetHeight;
+            
+            if (width > 0 && height > 0) {
+                try {
+                    window.network.setSize(`${width}px`, `${height}px`);
+                    window.network.fit();
+                } catch (err) {
+                    console.error("Error resizing network:", err);
+                }
             }
         }
-    }
-    
-    // Start checking after a delay to allow for initial page load
-    setTimeout(tryApplyDefaultLayout, 1000);
-  });
+    });
 </script>
 {% endblock %} 
