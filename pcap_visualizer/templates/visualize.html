@@ -1,0 +1,577 @@
+{% extends "base.html" %}
+
+{# Set full width flag for this template #}
+{% set full_width = True %}
+
+{% block title %}Network Visualization - {{ filename }}{% endblock %}
+
+{% block head %}
+<!-- Use local vis.js instead of CDN -->
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+<style>
+    #network-container {
+        width: 100vw;
+        /* Calculate height to leave room for other elements */
+        height: calc(100vh - 400px); /* Reduced height to fit everything on screen */
+        border: 1px solid #ddd;
+        background-color: #f8fafc;
+        border-radius: 0;
+        margin-left: calc(-50vw + 50%);
+        margin-right: calc(-50vw + 50%);
+        position: relative;
+        overflow: hidden; /* Prevent scrollbars within container */
+    }
+    
+    .control-panel {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        background: white;
+        border-radius: 8px;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        padding: 12px;
+        z-index: 10;
+        width: 250px;
+    }
+    
+    .node-tooltip {
+        background-color: white;
+        padding: 8px;
+        border-radius: 4px;
+        box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+        font-size: 12px;
+    }
+    
+    .legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 10px;
+    }
+    
+    .legend-item {
+        display: flex;
+        align-items: center;
+        font-size: 12px;
+    }
+    
+    .legend-color {
+        width: 12px;
+        height: 12px;
+        margin-right: 5px;
+        border-radius: 2px;
+    }
+    
+    /* Make controls container full width but with padding */
+    .controls-container {
+        padding: 0 1rem;
+        width: 100%;
+        max-width: 100%;
+    }
+    
+    /* More compact spacing */
+    .compact-controls {
+        margin-bottom: 0.75rem;
+        padding: 0.75rem;
+    }
+    
+    .compact-legend {
+        margin-top: 0.75rem;
+        padding: 0.5rem 1rem;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<!-- Make header more compact -->
+<div class="controls-container mb-2 flex justify-between items-center">
+    <div>
+        <h2 class="text-xl font-bold text-gray-800">
+            <i class="fas fa-project-diagram mr-2 text-primary"></i> 
+            Network Visualization: {{ filename }}
+        </h2>
+    </div>
+    <a href="{{ url_for('index') }}" class="bg-gray-200 hover:bg-gray-300 text-gray-800 py-1 px-3 rounded-md inline-flex items-center transition-colors text-sm">
+        <i class="fas fa-arrow-left mr-2"></i> Back
+    </a>
+</div>
+
+<!-- Make controls more compact -->
+<div class="controls-container bg-white rounded-lg shadow-md p-3 mb-3 compact-controls">
+    <div class="flex flex-wrap gap-2 mb-2">
+        <!-- Search box -->
+        <div class="flex-grow max-w-md">
+            <div class="relative">
+                <input type="text" id="search-input" class="w-full pl-10 pr-4 py-2 rounded-md border border-gray-300 focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent" placeholder="Search nodes...">
+                <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                    <i class="fas fa-search text-gray-400"></i>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Filter buttons -->
+        <div class="flex space-x-2">
+            <button id="filter-all" class="bg-primary text-white py-2 px-4 rounded-md hover:bg-opacity-90 transition-colors">
+                <i class="fas fa-globe-americas mr-1"></i> All
+            </button>
+            <button id="filter-mac" class="bg-gray-200 text-gray-800 py-2 px-4 rounded-md hover:bg-gray-300 transition-colors">
+                <i class="fas fa-network-wired mr-1"></i> MAC
+            </button>
+            <button id="filter-ip" class="bg-gray-200 text-gray-800 py-2 px-4 rounded-md hover:bg-gray-300 transition-colors">
+                <i class="fas fa-sitemap mr-1"></i> IP
+            </button>
+        </div>
+    </div>
+    
+    <div class="flex flex-wrap gap-2">
+        <!-- Layout controls -->
+        <div class="flex space-x-2">
+            <button id="layout-hierarchical" class="bg-gray-200 text-gray-800 py-2 px-4 rounded-md hover:bg-gray-300 transition-colors">
+                <i class="fas fa-sitemap mr-1"></i> Hierarchical
+            </button>
+            <button id="layout-physics" class="bg-gray-200 text-gray-800 py-2 px-4 rounded-md hover:bg-gray-300 transition-colors">
+                <i class="fas fa-atom mr-1"></i> Force Directed
+            </button>
+        </div>
+        
+        <!-- Action buttons -->
+        <div class="flex space-x-2 ml-auto">
+            <button id="btn-fullscreen" class="bg-gray-200 text-gray-800 py-2 px-4 rounded-md hover:bg-gray-300 transition-colors">
+                <i class="fas fa-expand mr-1"></i> Fullscreen
+            </button>
+            <button id="btn-export" class="bg-gray-200 text-gray-800 py-2 px-4 rounded-md hover:bg-gray-300 transition-colors">
+                <i class="fas fa-download mr-1"></i> Export
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Visualization container -->
+<div id="network-container"></div>
+
+<!-- Simplified and more compact legend -->
+<div class="controls-container flex items-center bg-white rounded-lg shadow-md compact-legend">
+    <span class="text-sm font-medium text-gray-700 mr-3">Legend:</span>
+    <div class="legend">
+        <div class="legend-item mr-4">
+            <div class="legend-color" style="background-color: #4f46e5;"></div>
+            <span class="text-xs">MAC Address</span>
+        </div>
+        <div class="legend-item mr-4">
+            <div class="legend-color" style="background-color: #10b981;"></div>
+            <span class="text-xs">IP Address</span>
+        </div>
+        <div class="legend-item">
+            <div class="legend-color" style="background-color: #000; height: 2px;"></div>
+            <span class="text-xs">Connection</span>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<!-- Use local vis.js instead of CDN -->
+<script src="{{ url_for('static', filename='js/vis-network-bundle.js') }}"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const container = document.getElementById('network-container');
+        let network = null;
+        let allNodes = [];
+        let allEdges = [];
+        
+        // Define different node groups with distinctive styles
+        const groups = {
+            mac: {
+                color: {
+                    background: '#4f46e5',
+                    border: '#3730a3',
+                    highlight: {
+                        background: '#818cf8',
+                        border: '#4f46e5'
+                    }
+                },
+                font: {
+                    color: '#ffffff'
+                },
+                borderWidth: 2,
+                shape: 'box'
+            },
+            ip: {
+                color: {
+                    background: '#10b981',
+                    border: '#047857',
+                    highlight: {
+                        background: '#34d399',
+                        border: '#10b981'
+                    }
+                },
+                font: {
+                    color: '#ffffff'
+                },
+                borderWidth: 2,
+                shape: 'ellipse',          // Changed from 'dot' to 'ellipse' for better visibility
+                size: 20,                  // Larger size for IP nodes
+                margin: 15                 // More margin around text
+            }
+        };
+        
+        // Edge styling
+        const edgesOptions = {
+            color: {
+                color: '#64748b',
+                highlight: '#334155',
+                hover: '#334155'
+            },
+            font: {
+                align: 'middle',
+                size: 10
+            },
+            selectionWidth: 2,
+            smooth: {
+                type: 'continuous',
+                roundness: 0.2
+            }
+        };
+        
+        // Network visualization options
+        const options = {
+            nodes: {
+                font: {
+                    size: 12,
+                    face: 'Roboto'
+                },
+                margin: 10,
+                shape: 'box',
+                scaling: {
+                    min: 16,
+                    max: 32
+                }
+            },
+            edges: edgesOptions,
+            groups: groups,
+            physics: {
+                enabled: true,
+                barnesHut: {
+                    gravitationalConstant: -8000,  // Further increased repulsion
+                    centralGravity: 0.03,         // Further reduced central gravity
+                    springLength: 300,            // Further increased spring length
+                    springConstant: 0.03,         // Further reduced spring constant
+                    damping: 0.09,
+                    avoidOverlap: 1               // Maximum avoidance of node overlap
+                },
+                stabilization: {
+                    iterations: 200,
+                    updateInterval: 25,
+                    fit: true
+                },
+                minVelocity: 0.75            // Allows simulation to continue longer
+            },
+            interaction: {
+                hover: true,
+                tooltipDelay: 200,
+                navigationButtons: true,
+                keyboard: true,
+                zoomView: true
+            },
+            layout: {
+                randomSeed: 1,
+                improvedLayout: true,
+                clusterThreshold: 150             // Better clustering behavior
+            }
+        };
+        
+        // Load the network data from the API
+        fetch(`/api/network_data/{{ filename }}`)
+            .then(response => response.json())
+            .then(data => {
+                allNodes = new vis.DataSet(data.nodes);
+                allEdges = new vis.DataSet(data.edges);
+                
+                // Create the network
+                const networkData = {
+                    nodes: allNodes,
+                    edges: allEdges
+                };
+                
+                network = new vis.Network(container, networkData, options);
+                
+                // Network events
+                network.on("doubleClick", function(params) {
+                    if (params.nodes.length > 0) {
+                        // Focus on the selected node
+                        network.focus(params.nodes[0], {
+                            scale: 1.2,
+                            animation: true
+                        });
+                    }
+                });
+                
+                // Stabilize the network for better initial layout
+                network.once("stabilizationIterationsDone", function() {
+                    console.log("Network stabilized");
+                    
+                    // Apply a final layout adjustment to spread nodes further
+                    const nodeIds = network.getNodeIds();
+                    const positions = network.getPositions(nodeIds);
+                    const nodeData = allNodes.get();
+                    
+                    // Group nodes by type
+                    const ipNodes = nodeData.filter(node => node.group === 'ip').map(node => node.id);
+                    const macNodes = nodeData.filter(node => node.group === 'mac').map(node => node.id);
+                    
+                    // Scale positions outward by different factors based on node type
+                    // IP nodes get more expansion than MAC nodes
+                    for (const nodeId of nodeIds) {
+                        const pos = positions[nodeId];
+                        if (ipNodes.includes(nodeId)) {
+                            // IP nodes get expanded more (40% scaling)
+                            network.moveNode(nodeId, pos.x * 1.4, pos.y * 1.4);
+                        } else {
+                            // MAC nodes get normal expansion (20% scaling)
+                            network.moveNode(nodeId, pos.x * 1.2, pos.y * 1.2);
+                        }
+                    }
+                    
+                    // Disable physics after stabilization
+                    network.setOptions({ physics: { enabled: false } });
+                    
+                    // Call resize after stabilization
+                    setTimeout(resizeNetwork, 100);
+                });
+                
+                // Set up search functionality
+                setupSearch(network, allNodes);
+                
+                // Set up filter buttons
+                setupFilters(network, allNodes, allEdges);
+                
+                // Set up layout buttons
+                setupLayouts(network);
+                
+                // Set up action buttons
+                setupActionButtons(network, container);
+            })
+            .catch(error => {
+                console.error('Error loading network data:', error);
+                container.innerHTML = `
+                    <div class="flex flex-col items-center justify-center h-full">
+                        <i class="fas fa-exclamation-triangle text-error text-4xl mb-4"></i>
+                        <h3 class="text-xl font-bold text-gray-800 mb-2">Error Loading Data</h3>
+                        <p class="text-gray-600">Failed to load network data: ${error.message}</p>
+                    </div>
+                `;
+            });
+        
+        // Setup search functionality
+        function setupSearch(network, nodes) {
+            const searchInput = document.getElementById('search-input');
+            searchInput.addEventListener('input', function(e) {
+                const searchTerm = e.target.value.toLowerCase();
+                
+                if (searchTerm === '') {
+                    // Reset all nodes to visible
+                    nodes.forEach(node => {
+                        nodes.update({ id: node.id, hidden: false });
+                    });
+                    return;
+                }
+                
+                // Hide nodes that don't match the search term
+                nodes.forEach(node => {
+                    const label = (node.label || '').toLowerCase();
+                    const title = (node.title || '').toLowerCase();
+                    const matches = label.includes(searchTerm) || title.includes(searchTerm);
+                    nodes.update({ id: node.id, hidden: !matches });
+                });
+            });
+        }
+        
+        // Setup filter buttons
+        function setupFilters(network, nodes, edges) {
+            const btnAll = document.getElementById('filter-all');
+            const btnMac = document.getElementById('filter-mac');
+            const btnIp = document.getElementById('filter-ip');
+            
+            btnAll.addEventListener('click', function() {
+                // Show all nodes
+                nodes.forEach(node => {
+                    nodes.update({ id: node.id, hidden: false });
+                });
+                
+                // Update button styles
+                updateFilterButtonStyles(btnAll);
+            });
+            
+            btnMac.addEventListener('click', function() {
+                // Show MAC nodes, hide IP nodes
+                nodes.forEach(node => {
+                    const isMac = node.group === 'mac';
+                    nodes.update({ id: node.id, hidden: !isMac });
+                });
+                
+                // Update button styles
+                updateFilterButtonStyles(btnMac);
+            });
+            
+            btnIp.addEventListener('click', function() {
+                // Show IP nodes, hide MAC nodes
+                nodes.forEach(node => {
+                    const isIp = node.group === 'ip';
+                    nodes.update({ id: node.id, hidden: !isIp });
+                });
+                
+                // Update button styles
+                updateFilterButtonStyles(btnIp);
+            });
+            
+            function updateFilterButtonStyles(activeButton) {
+                // Reset all button styles
+                [btnAll, btnMac, btnIp].forEach(btn => {
+                    btn.classList.remove('bg-primary', 'text-white');
+                    btn.classList.add('bg-gray-200', 'text-gray-800');
+                });
+                
+                // Set active button style
+                activeButton.classList.remove('bg-gray-200', 'text-gray-800');
+                activeButton.classList.add('bg-primary', 'text-white');
+            }
+        }
+        
+        // Setup layout buttons
+        function setupLayouts(network) {
+            const btnHierarchical = document.getElementById('layout-hierarchical');
+            const btnPhysics = document.getElementById('layout-physics');
+            
+            btnHierarchical.addEventListener('click', function() {
+                network.setOptions({
+                    physics: { enabled: false },
+                    layout: {
+                        hierarchical: {
+                            direction: 'LR',
+                            sortMethod: 'directed',
+                            nodeSpacing: 250,         // Increased node spacing
+                            levelSeparation: 300,     // Increased level separation
+                            treeSpacing: 200          // Added tree spacing
+                        }
+                    }
+                });
+                
+                // Update button styles
+                updateLayoutButtonStyles(btnHierarchical);
+            });
+            
+            btnPhysics.addEventListener('click', function() {
+                network.setOptions({
+                    layout: { hierarchical: false },
+                    physics: {
+                        enabled: true,
+                        barnesHut: {
+                            gravitationalConstant: -8000,     // Further increased repulsion
+                            centralGravity: 0.03,             // Further reduced central gravity
+                            springLength: 300,                // Further increased spring length
+                            springConstant: 0.03,             // Further reduced spring constant
+                            damping: 0.09,
+                            avoidOverlap: 1                   // Maximum avoidance of node overlap
+                        }
+                    }
+                });
+                
+                // Update button styles
+                updateLayoutButtonStyles(btnPhysics);
+                
+                // Re-enable physics for a longer time to find a better layout
+                setTimeout(() => {
+                    // Apply final spacing by scaling the positions outward
+                    const nodeIds = network.getNodeIds();
+                    const positions = network.getPositions(nodeIds);
+                    const nodeData = allNodes.get();
+                    
+                    // Group nodes by type
+                    const ipNodes = nodeData.filter(node => node.group === 'ip').map(node => node.id);
+                    const macNodes = nodeData.filter(node => node.group === 'mac').map(node => node.id);
+                    
+                    // Scale positions outward by different factors based on node type
+                    for (const nodeId of nodeIds) {
+                        const pos = positions[nodeId];
+                        if (ipNodes.includes(nodeId)) {
+                            // IP nodes get expanded more (40% scaling)
+                            network.moveNode(nodeId, pos.x * 1.4, pos.y * 1.4);
+                        } else {
+                            // MAC nodes get normal expansion (20% scaling)
+                            network.moveNode(nodeId, pos.x * 1.2, pos.y * 1.2);
+                        }
+                    }
+                    
+                    network.setOptions({ physics: { enabled: false } });
+                }, 5000);  // Longer time for better layout
+            });
+            
+            function updateLayoutButtonStyles(activeButton) {
+                // Reset all button styles
+                [btnHierarchical, btnPhysics].forEach(btn => {
+                    btn.classList.remove('bg-primary', 'text-white');
+                    btn.classList.add('bg-gray-200', 'text-gray-800');
+                });
+                
+                // Set active button style
+                activeButton.classList.remove('bg-gray-200', 'text-gray-800');
+                activeButton.classList.add('bg-primary', 'text-white');
+            }
+        }
+        
+        // Setup action buttons
+        function setupActionButtons(network, container) {
+            const btnFullscreen = document.getElementById('btn-fullscreen');
+            const btnExport = document.getElementById('btn-export');
+            
+            btnFullscreen.addEventListener('click', function() {
+                if (!document.fullscreenElement) {
+                    container.requestFullscreen().catch(err => {
+                        console.error(`Error attempting to enable fullscreen: ${err.message}`);
+                    });
+                } else {
+                    document.exitFullscreen();
+                }
+            });
+            
+            btnExport.addEventListener('click', function() {
+                // Export the current network view as an image
+                const canvas = container.querySelector('canvas');
+                if (canvas) {
+                    html2canvas(container).then(canvas => {
+                        const imageData = canvas.toDataURL('image/png');
+                        const link = document.createElement('a');
+                        link.href = imageData;
+                        link.download = `network_visualization_${Date.now()}.png`;
+                        link.click();
+                    });
+                }
+            });
+        }
+        
+        // Improved resize handler to ensure everything fits on screen
+        function resizeNetwork() {
+            if (network) {
+                // Calculate available height
+                const headerHeight = document.querySelector('header').offsetHeight;
+                const controlsHeight = document.querySelector('.compact-controls').offsetHeight;
+                const legendHeight = document.querySelector('.compact-legend').offsetHeight;
+                const footerHeight = document.querySelector('footer').offsetHeight;
+                const spacing = 30; // Extra spacing/margins
+                
+                // Calculate available height
+                const availableHeight = window.innerHeight - headerHeight - controlsHeight - legendHeight - footerHeight - spacing;
+                
+                // Set network container height
+                network.setSize('100vw', `${availableHeight}px`);
+                network.redraw();
+            }
+        }
+        
+        // Call resize on load and window resize
+        window.addEventListener('resize', resizeNetwork);
+    });
+</script>
+{% endblock %} 
