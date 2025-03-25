@@ -189,8 +189,8 @@
                 <i class="fas fa-arrow-left mr-2"></i>Back to Files
             </a>
         </div>
-    </div>
-    
+</div>
+
     <div class="grid grid-cols-1 gap-4">
         <div class="card">
             <div class="card-body p-0">
@@ -203,55 +203,55 @@
                             <button id="search-button" class="btn btn-primary ml-2">
                                 <i class="fas fa-search"></i>
                             </button>
-                        </div>
-                    </div>
-                    
+            </div>
+        </div>
+        
                     <div class="controls">
                         <div class="flex flex-col space-y-2">
                             <button id="reset-zoom" class="btn btn-secondary btn-sm">
                                 <i class="fas fa-expand mr-1"></i>Reset View
-                            </button>
+            </button>
                             <button id="toggle-labels" class="btn btn-secondary btn-sm">
                                 <i class="fas fa-tag mr-1"></i>Toggle Labels
-                            </button>
+            </button>
                             <button id="toggle-physics" class="btn btn-secondary btn-sm">
                                 <i class="fas fa-atom mr-1"></i>Toggle Physics
                             </button>
                             <button id="btn-fullscreen" class="btn btn-secondary btn-sm">
                                 <i class="fas fa-expand-arrows-alt mr-1"></i>Fullscreen
-                            </button>
-                        </div>
-                        
+            </button>
+    </div>
+    
                         <div class="mt-4">
                             <h3 class="font-medium mb-2 text-sm">Layout:</h3>
                             <div class="flex flex-col space-y-1">
                                 <button id="layout-force" class="btn btn-primary btn-sm">
                                     <i class="fas fa-project-diagram mr-1"></i>Force Directed
-                                </button>
+            </button>
                                 <button id="layout-radial" class="btn btn-secondary btn-sm">
                                     <i class="fas fa-dot-circle mr-1"></i>Radial
-                                </button>
+            </button>
                                 <button id="layout-group" class="btn btn-secondary btn-sm">
                                     <i class="fas fa-sitemap mr-1"></i>By Group
-                                </button>
+            </button>
                                 <button id="layout-subnet" class="btn btn-secondary btn-sm">
                                     <i class="fas fa-sitemap mr-1"></i>By Subnet
-                                </button>
-                            </div>
-                        </div>
-                        
+            </button>
+    </div>
+</div>
+
                         <div class="mt-4">
                             <h3 class="font-medium mb-2 text-sm">Legend:</h3>
-                            <div class="legend">
+    <div class="legend">
                                 <div class="legend-item">
                                     <div class="legend-color" style="background-color: #4ade80;"></div>
                                     <span class="text-xs">Request Accepted</span>
-                                </div>
+        </div>
                                 <div class="legend-item">
                                     <div class="legend-color" style="background-color: #3b82f6;"></div>
                                     <span class="text-xs">Response/Established</span>
-                                </div>
-                                <div class="legend-item">
+        </div>
+        <div class="legend-item">
                                     <div class="legend-color" style="background-color: #ef4444;"></div>
                                     <span class="text-xs">Request Rejected</span>
                                 </div>
@@ -718,7 +718,7 @@
                 if (linkMap.has(key)) {
                     // This is a duplicate link, mark it for later
                     link.isDuplicate = true;
-                } else {
+                    } else {
                     // Check if there's a reverse link
                     const reverseKey = `${link.target.id}-${link.source.id}`;
                     const existingLinks = linkMap.get(reverseKey) || [];

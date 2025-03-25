@@ -129,11 +129,39 @@ def parse_json_file(file_path):
         if not isinstance(data, dict):
             return {'nodes': [], 'edges': []}
             
+        # Extract nodes
         if 'nodes' not in data or not isinstance(data['nodes'], list):
             data['nodes'] = []
             
-        if 'edges' not in data or not isinstance(data['edges'], list):
+        # Handle the case where JSON has 'links' instead of 'edges'
+        if 'edges' not in data and 'links' in data and isinstance(data['links'], list):
+            # Map links to edges with the expected structure
+            edges = []
+            for link in data['links']:
+                edge = {
+                    'id': link.get('id', f"e{len(edges)}"),
+                    'from': link.get('source', ''),
+                    'to': link.get('target', ''),
+                    'label': link.get('label', ''),
+                    'title': link.get('title', ''),
+                    'value': link.get('value', 1),
+                    'group': link.get('group', 'default'),
+                }
+                
+                # Add any custom attributes
+                for key, value in link.items():
+                    if key not in ['id', 'source', 'target', 'label', 'title', 'value', 'group']:
+                        edge[key] = value
+                
+                edges.append(edge)
+            
+            data['edges'] = edges
+        elif 'edges' not in data or not isinstance(data['edges'], list):
             data['edges'] = []
+            
+        # Add metadata if needed
+        if 'metadata' in data:
+            data['metadata'] = data['metadata']
             
         return data
     except Exception as e:
