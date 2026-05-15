@@ -1,0 +1,21 @@
+{
+  "schema_version": "1.0",
+  "fixtures": [
+    {
+      "name": "misc_cap",
+      "pcap": "../pcaps/misc_cap.pcapng",
+      "description": "Mixed IPv4 capture used as a baseline device CSV golden.",
+      "goldens": {
+        "device_csv": "../outputs/misc_cap-device_info.csv"
+      }
+    },
+    {
+      "name": "vlan_240",
+      "pcap": "../pcaps/vlan-240.pcapng",
+      "description": "VLAN-tagged capture used as a second regression baseline.",
+      "goldens": {
+        "device_csv": "../outputs/vlan-240-device_info.csv"
+      }
+    }
+  ]
+}

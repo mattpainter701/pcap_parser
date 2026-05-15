@@ -1,3 +1,4 @@
+import cProfile
 import sys
 from collections import defaultdict
 import pyshark
@@ -7,55 +8,118 @@ import os
 import re
 import time
 import json
+import pstats
+import tracemalloc
+from dataclasses import dataclass, field
+from functools import lru_cache
 from datetime import datetime
+from pathlib import Path
+from typing import Any, Iterable
 
-try:
-    from jsonschema import Draft7Validator
-except ImportError:  # pragma: no cover - handled at runtime when validation is requested
-    Draft7Validator = None
+from pcap_regression import (
+    validate_conversation_csv,
+    validate_device_csv,
+    validate_network_json,
+)
 
 OUI_FILE = "oui.txt"
 OUI_CSV_FILE = "oui.csv"
 OUTPUT_DIR = "outputs"
-SCHEMA_VERSION = "1.0.0"
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-SCHEMA_DIR = os.path.join(SCRIPT_DIR, "schemas", f"v{SCHEMA_VERSION}")
-DEVICE_CSV_HEADERS = [
-    "MAC Address",
-    "Vendor",
-    "IP Address",
-    "TCP Ports",
-    "UDP Ports",
-    "First Seen",
-    "Last Seen",
-    "Packet Count",
-]
-CONVERSATION_CSV_HEADERS = [
-    "Source IP",
-    "Source MAC",
-    "Source TCP Port",
-    "Source UDP Port",
-    "Target IP",
-    "Target MAC",
-    "Target TCP Port",
-    "Target UDP Port",
-    "Protocol",
-    "Application Protocol",
-    "Packets A->B",
-    "Packets B->A",
-    "Bytes A->B",
-    "Bytes B->A",
-    "First Seen",
-    "Last Seen",
-    "Duration (seconds)",
-    "Conversation Status",
-    "TCP Flags",
-    "Stream ID",
-    "Frame Protocols",
-    "VLAN ID",
-    "DiffServ Field",
-    "IP Version",
-]
+
+
+def _mac_to_oui(mac: str | None) -> str | None:
+    """Normalize a MAC address to the OUI key format used by the IEEE DB."""
+    if not mac:
+        return None
+
+    try:
+        normalized_mac = mac.replace("-", ":")
+        parts = normalized_mac.split(":")
+        if len(parts) < 3:
+            return None
+        return ":".join(parts[:3]).upper()
+    except Exception:
+        return None
+
+
+@lru_cache(maxsize=4096)
+def _lookup_vendor_by_oui(oui: str | None) -> str | None:
+    if not oui:
+        return None
+    return ieee_oui_db.get(oui)
+
+
+@dataclass(slots=True)
+class PortSummary:
+    tcp_ports: set[int] = field(default_factory=set)
+    udp_ports: set[int] = field(default_factory=set)
+    packet_count: int = 0
+    first_seen: float | None = None
+    last_seen: float | None = None
+
+    def __getitem__(self, key: str) -> Any:
+        return getattr(self, key)
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        setattr(self, key, value)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return getattr(self, key, default)
+
+
+@dataclass(slots=True)
+class DeviceSummary:
+    vendor: str | None = None
+    packet_count: int = 0
+    first_seen: float | None = None
+    last_seen: float | None = None
+    ip_connections: defaultdict[str, PortSummary] = field(default_factory=lambda: defaultdict(PortSummary))
+
+    def __getitem__(self, key: str) -> Any:
+        return getattr(self, key)
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        setattr(self, key, value)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return getattr(self, key, default)
+
+
+@dataclass(slots=True)
+class ConversationSummary:
+    source_ip: str | None = None
+    source_mac: str | None = None
+    source_tcp_port: int | None = None
+    source_udp_port: int | None = None
+    target_ip: str | None = None
+    target_mac: str | None = None
+    target_tcp_port: int | None = None
+    target_udp_port: int | None = None
+    protocol: str | None = None
+    app_protocol: str | None = None
+    packets_a_to_b: int = 0
+    packets_b_to_a: int = 0
+    bytes_a_to_b: int = 0
+    bytes_b_to_a: int = 0
+    first_seen: float | None = None
+    last_seen: float | None = None
+    duration: float = 0
+    conversation_status: str = "unknown"
+    tcp_flags: set[str] = field(default_factory=set)
+    stream_id: str | None = None
+    frame_protocols: set[str] = field(default_factory=set)
+    vlan_id: str | None = None
+    dsfield: str | None = None
+    ip_version: int | None = None
+
+    def __getitem__(self, key: str) -> Any:
+        return getattr(self, key)
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        setattr(self, key, value)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return getattr(self, key, default)
 
 def parse_oui_file():
     """
@@ -73,7 +137,9 @@ def parse_oui_file():
                     if len(row) >= 2:
                         mac = row[0].upper()
                         vendor = row[1]
-                        oui_dict[mac] = vendor
+                        normalized = _mac_to_oui(mac)
+                        if normalized:
+                            oui_dict[normalized] = vendor
             print(f"[+] Loaded {len(oui_dict)} OUI entries from CSV file")
             return oui_dict
         except Exception as e:
@@ -89,7 +155,9 @@ def parse_oui_file():
                         if len(parts) == 2:
                             mac = parts[0].strip().replace("-", ":").upper()
                             vendor = parts[1].strip()
-                            oui_dict[mac] = vendor
+                            normalized = _mac_to_oui(mac)
+                            if normalized:
+                                oui_dict[normalized] = vendor
             
             # Save as CSV for faster future parsing
             try:
@@ -114,26 +182,13 @@ def parse_oui_file():
 ieee_oui_db = {}
 try:
     ieee_oui_db = parse_oui_file()
+    _lookup_vendor_by_oui.cache_clear()
 except Exception as e:
     print(f"[!] Failed to load IEEE OUI database: {e}")
 
-def get_vendor(mac: str) -> str:
+def get_vendor(mac: str) -> str | None:
     """Return vendor based on MAC OUI."""
-    if not mac:
-        return None
-        
-    # Try using the IEEE OUI database
-    try:
-        # Format MAC address to match the format in the database
-        parts = mac.split(":")
-        if len(parts) >= 3:
-            oui = ":".join(parts[:3]).upper()
-            if oui in ieee_oui_db:
-                return ieee_oui_db[oui]
-    except Exception:
-        pass
-            
-    return None
+    return _lookup_vendor_by_oui(_mac_to_oui(mac))
 
 def is_valid_mac(mac: str) -> bool:
     """Check if MAC address is valid and not broadcast/multicast."""
@@ -171,196 +226,7 @@ def check_tshark_installation():
         print("    pip install pyshark")
         return False
 
-
-def schema_path(filename):
-    return os.path.join(SCHEMA_DIR, filename)
-
-
-def load_schema(filename):
-    with open(schema_path(filename), "r", encoding="utf-8") as handle:
-        return json.load(handle)
-
-
-def format_timestamp(value):
-    if value is None:
-        return ""
-    return datetime.fromtimestamp(value).isoformat()
-
-
-def format_optional_value(value):
-    if value is None:
-        return ""
-    return str(value)
-
-
-def format_port_list(values):
-    if not values:
-        return ""
-    return ",".join(map(str, sorted(values)))
-
-
-def validate_with_schema(payload, schema_filename, context_label):
-    if Draft7Validator is None:
-        print("\n[!] Output validation requested, but the 'jsonschema' package is not installed.")
-        print("[!] Install it with: pip install jsonschema")
-        return False
-
-    schema = load_schema(schema_filename)
-    validator = Draft7Validator(schema)
-    errors = sorted(validator.iter_errors(payload), key=lambda error: list(error.absolute_path))
-    if errors:
-        print(f"\n[!] {context_label} failed schema validation against {schema_filename}")
-        for error in errors[:5]:
-            path = "/".join(map(str, error.absolute_path)) or "<root>"
-            print(f"[!]   {path}: {error.message}")
-        if len(errors) > 5:
-            print(f"[!]   ... and {len(errors) - 5} more error(s)")
-        return False
-    return True
-
-
-def validate_csv_output(output_path, schema_filename, header_contract, context_label):
-    with open(output_path, "r", encoding="utf-8", newline="") as handle:
-        reader = csv.DictReader(handle)
-        if reader.fieldnames != header_contract:
-            print(f"\n[!] {context_label} headers do not match the canonical contract")
-            print(f"[!]   expected: {header_contract}")
-            print(f"[!]   found:    {reader.fieldnames}")
-            return False
-        rows = list(reader)
-
-    return validate_with_schema(rows, schema_filename, context_label)
-
-
-def validate_json_output(output_path, schema_filename, context_label):
-    with open(output_path, "r", encoding="utf-8") as handle:
-        payload = json.load(handle)
-    return validate_with_schema(payload, schema_filename, context_label)
-
-
-def build_device_rows(device_info):
-    rows = []
-    for mac, info in device_info.items():
-        vendor = info.get("vendor") or "Unknown"
-        for ip, ip_info in info.get("ip_connections", {}).items():
-            rows.append(
-                {
-                    "MAC Address": mac,
-                    "Vendor": vendor,
-                    "IP Address": ip or "",
-                    "TCP Ports": format_port_list(ip_info.get("tcp_ports", [])),
-                    "UDP Ports": format_port_list(ip_info.get("udp_ports", [])),
-                    "First Seen": format_timestamp(ip_info.get("first_seen")),
-                    "Last Seen": format_timestamp(ip_info.get("last_seen")),
-                    "Packet Count": str(ip_info.get("packet_count", 0)),
-                }
-            )
-    return rows
-
-
-def build_conversation_rows(conversation_data):
-    rows = []
-    for _, conv in conversation_data.items():
-        rows.append(
-            {
-                "Source IP": format_optional_value(conv.get("source_ip")),
-                "Source MAC": format_optional_value(conv.get("source_mac")),
-                "Source TCP Port": format_optional_value(conv.get("source_tcp_port")),
-                "Source UDP Port": format_optional_value(conv.get("source_udp_port")),
-                "Target IP": format_optional_value(conv.get("target_ip")),
-                "Target MAC": format_optional_value(conv.get("target_mac")),
-                "Target TCP Port": format_optional_value(conv.get("target_tcp_port")),
-                "Target UDP Port": format_optional_value(conv.get("target_udp_port")),
-                "Protocol": format_optional_value(conv.get("protocol")),
-                "Application Protocol": format_optional_value(conv.get("app_protocol")),
-                "Packets A->B": str(conv.get("packets_a_to_b", 0)),
-                "Packets B->A": str(conv.get("packets_b_to_a", 0)),
-                "Bytes A->B": str(conv.get("bytes_a_to_b", 0)),
-                "Bytes B->A": str(conv.get("bytes_b_to_a", 0)),
-                "First Seen": format_timestamp(conv.get("first_seen")),
-                "Last Seen": format_timestamp(conv.get("last_seen")),
-                "Duration (seconds)": f"{conv['duration']:.3f}" if conv.get("duration") else "",
-                "Conversation Status": format_optional_value(conv.get("conversation_status")),
-                "TCP Flags": ",".join(sorted(conv.get("tcp_flags", []))),
-                "Stream ID": format_optional_value(conv.get("stream_id")),
-                "Frame Protocols": deduplicate_protocols(conv.get("frame_protocols", set())),
-                "VLAN ID": format_optional_value(conv.get("vlan_id")),
-                "DiffServ Field": format_optional_value(conv.get("dsfield")),
-                "IP Version": format_optional_value(conv.get("ip_version")),
-            }
-        )
-    return rows
-
-
-def build_network_data(device_info, conversation_data, pcap_file):
-    nodes = []
-    for mac, info in device_info.items():
-        ips = list(info.get("ip_connections", {}).keys())
-        all_tcp_ports = set()
-        all_udp_ports = set()
-        for ip_info in info.get("ip_connections", {}).values():
-            all_tcp_ports.update(ip_info.get("tcp_ports", set()))
-            all_udp_ports.update(ip_info.get("udp_ports", set()))
-
-        nodes.append(
-            {
-                "id": mac,
-                "label": mac,
-                "vendor": info.get("vendor") or "Unknown",
-                "ips": ips,
-                "tcp_ports": sorted(all_tcp_ports) if all_tcp_ports else [],
-                "udp_ports": sorted(all_udp_ports) if all_udp_ports else [],
-                "packet_count": info.get("packet_count", 0),
-                "first_seen": format_timestamp(info.get("first_seen")) or None,
-                "last_seen": format_timestamp(info.get("last_seen")) or None,
-            }
-        )
-
-    links = []
-    for _, conv in conversation_data.items():
-        links.append(
-            {
-                "source": conv.get("source_mac"),
-                "target": conv.get("target_mac"),
-                "source_ip": conv.get("source_ip"),
-                "target_ip": conv.get("target_ip"),
-                "protocol": conv.get("protocol"),
-                "app_protocol": conv.get("app_protocol"),
-                "source_tcp_port": conv.get("source_tcp_port"),
-                "target_tcp_port": conv.get("target_tcp_port"),
-                "source_udp_port": conv.get("source_udp_port"),
-                "target_udp_port": conv.get("target_udp_port"),
-                "packets_a_to_b": conv.get("packets_a_to_b", 0),
-                "packets_b_to_a": conv.get("packets_b_to_a", 0),
-                "bytes_a_to_b": conv.get("bytes_a_to_b", 0),
-                "bytes_b_to_a": conv.get("bytes_b_to_a", 0),
-                "first_seen": format_timestamp(conv.get("first_seen")) or None,
-                "last_seen": format_timestamp(conv.get("last_seen")) or None,
-                "duration": round(conv["duration"], 3) if conv.get("duration") else None,
-                "conversation_status": conv.get("conversation_status"),
-                "tcp_flags": sorted(list(conv.get("tcp_flags", []))) if conv.get("tcp_flags") else [],
-                "stream_id": conv.get("stream_id"),
-                "frame_protocols": deduplicate_protocols(conv.get("frame_protocols", set())),
-                "vlan_id": conv.get("vlan_id"),
-                "dsfield": conv.get("dsfield"),
-                "ip_version": conv.get("ip_version"),
-            }
-        )
-
-    return {
-        "metadata": {
-            "schema_version": SCHEMA_VERSION,
-            "generated_at": datetime.now().isoformat(),
-            "pcap_file": os.path.basename(pcap_file),
-            "total_nodes": len(nodes),
-            "total_links": len(links),
-        },
-        "nodes": nodes,
-        "links": links,
-    }
-
-
-def extract_device_info(pcap_file, debug=False):
+def extract_device_info(pcap_file, debug=False, collect_metrics=False):
     """
     Extracts device information from all packets in the provided pcap file.
     Now extracting detailed conversation data between pairs of IP addresses.
@@ -375,48 +241,10 @@ def extract_device_info(pcap_file, debug=False):
         return None
 
     # Track device information keyed by MAC address
-    device_info = defaultdict(lambda: {
-        'vendor': None,
-        'packet_count': 0,
-        'first_seen': None,
-        'last_seen': None,
-        'ip_connections': defaultdict(lambda: {
-            'tcp_ports': set(),
-            'udp_ports': set(),
-            'packet_count': 0,
-            'first_seen': None,
-            'last_seen': None
-        })
-    })
-    
-    # New structure to track conversations between pairs of endpoints
-    # Key is a tuple of (src_ip, dst_ip, src_port, dst_port, protocol)
-    conversation_data = defaultdict(lambda: {
-        'source_ip': None,
-        'source_mac': None,
-        'source_tcp_port': None,
-        'source_udp_port': None,
-        'target_ip': None,
-        'target_mac': None, 
-        'target_tcp_port': None,
-        'target_udp_port': None,
-        'protocol': None,
-        'app_protocol': None,
-        'packets_a_to_b': 0,
-        'packets_b_to_a': 0,
-        'bytes_a_to_b': 0,
-        'bytes_b_to_a': 0,
-        'first_seen': None,
-        'last_seen': None,
-        'duration': 0,
-        'conversation_status': 'unknown',
-        'tcp_flags': set(),
-        'stream_id': None,
-        'frame_protocols': set(),
-        'vlan_id': None,
-        'dsfield': None,
-        'ip_version': None,
-    })
+    device_info = defaultdict(DeviceSummary)
+
+    # Track conversations between pairs of endpoints.
+    conversation_data = defaultdict(ConversationSummary)
 
     packet_count = 0
     processed_count = 0
@@ -668,6 +496,15 @@ def extract_device_info(pcap_file, debug=False):
     
     print(f"[+] Processed {processed_count} of {packet_count} packets")
     print(f"[+] Found {len(conversation_data)} unique conversations")
+
+    if collect_metrics:
+        metrics = {
+            "packet_count": packet_count,
+            "processed_count": processed_count,
+            "device_count": len(device_info),
+            "conversation_count": len(conversation_data),
+        }
+        return device_info, conversation_data, metrics
     
     return device_info, conversation_data
 
@@ -679,28 +516,211 @@ def download_oui_instructions():
     print(f"   ({os.path.dirname(os.path.abspath(__file__))})")
     print("3. Run the script again\n")
 
-def write_csv_report(device_info, output_csv, validate_output=False):
+
+@dataclass(frozen=True, slots=True)
+class BenchmarkFunctionStat:
+    function: str
+    primitive_calls: int
+    total_calls: int
+    total_time_seconds: float
+    cumulative_time_seconds: float
+
+
+@dataclass(frozen=True, slots=True)
+class BenchmarkReport:
+    pcap_file: str
+    wall_time_seconds: float
+    cpu_time_seconds: float
+    peak_memory_bytes: int
+    packet_count: int
+    processed_packets: int
+    device_count: int
+    conversation_count: int
+    packets_per_second: float
+    cpu_utilization_percent: float
+    top_functions: list[BenchmarkFunctionStat]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "pcap_file": self.pcap_file,
+            "wall_time_seconds": self.wall_time_seconds,
+            "cpu_time_seconds": self.cpu_time_seconds,
+            "peak_memory_bytes": self.peak_memory_bytes,
+            "packet_count": self.packet_count,
+            "processed_packets": self.processed_packets,
+            "device_count": self.device_count,
+            "conversation_count": self.conversation_count,
+            "packets_per_second": self.packets_per_second,
+            "cpu_utilization_percent": self.cpu_utilization_percent,
+            "top_functions": [
+                {
+                    "function": item.function,
+                    "primitive_calls": item.primitive_calls,
+                    "total_calls": item.total_calls,
+                    "total_time_seconds": item.total_time_seconds,
+                    "cumulative_time_seconds": item.cumulative_time_seconds,
+                }
+                for item in self.top_functions
+            ],
+        }
+
+
+def _profile_top_functions(profile: cProfile.Profile, limit: int = 10) -> list[BenchmarkFunctionStat]:
+    stats = pstats.Stats(profile)
+    rows: list[BenchmarkFunctionStat] = []
+    for (filename, line_number, function_name), (primitive_calls, total_calls, total_time, cumulative_time, _) in stats.stats.items():
+        rows.append(
+            BenchmarkFunctionStat(
+                function=f"{Path(filename).name}:{line_number}:{function_name}",
+                primitive_calls=primitive_calls,
+                total_calls=total_calls,
+                total_time_seconds=total_time,
+                cumulative_time_seconds=cumulative_time,
+            )
+        )
+    rows.sort(key=lambda item: (item.cumulative_time_seconds, item.total_time_seconds, item.total_calls), reverse=True)
+    return rows[:limit]
+
+
+def collect_benchmark_report(
+    pcap_file: str | Path,
+    *,
+    debug: bool = False,
+    top_n: int = 10,
+    capture_runner=None,
+) -> BenchmarkReport:
+    runner = capture_runner or extract_device_info
+    profiler = cProfile.Profile()
+
+    tracemalloc.start()
+    wall_start = time.perf_counter()
+    cpu_start = time.process_time()
+    profiler.enable()
+    try:
+        result = runner(pcap_file, debug=debug, collect_metrics=True)
+    finally:
+        profiler.disable()
+        cpu_time_seconds = time.process_time() - cpu_start
+        wall_time_seconds = time.perf_counter() - wall_start
+        _, peak_memory_bytes = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+
+    if not result:
+        raise RuntimeError("benchmark capture produced no data")
+
+    if len(result) == 3:
+        device_info, conversation_data, metrics = result
+    else:
+        device_info, conversation_data = result
+        metrics = {}
+
+    packet_count = int(metrics.get("packet_count", metrics.get("processed_count", 0)))
+    processed_packets = int(metrics.get("processed_count", packet_count))
+    packets_per_second = processed_packets / wall_time_seconds if wall_time_seconds else 0.0
+    cpu_utilization_percent = (cpu_time_seconds / wall_time_seconds * 100.0) if wall_time_seconds else 0.0
+
+    return BenchmarkReport(
+        pcap_file=str(pcap_file),
+        wall_time_seconds=wall_time_seconds,
+        cpu_time_seconds=cpu_time_seconds,
+        peak_memory_bytes=peak_memory_bytes,
+        packet_count=packet_count,
+        processed_packets=processed_packets,
+        device_count=len(device_info),
+        conversation_count=len(conversation_data),
+        packets_per_second=packets_per_second,
+        cpu_utilization_percent=cpu_utilization_percent,
+        top_functions=_profile_top_functions(profiler, limit=top_n),
+    )
+
+
+def render_benchmark_report(report: BenchmarkReport) -> str:
+    lines = [
+        "Benchmark report",
+        f"PCAP: {report.pcap_file}",
+        f"Wall time: {report.wall_time_seconds:.3f}s",
+        f"CPU time: {report.cpu_time_seconds:.3f}s",
+        f"Peak memory: {report.peak_memory_bytes / (1024 * 1024):.2f} MiB",
+        f"Packets seen: {report.packet_count}",
+        f"Packets processed: {report.processed_packets}",
+        f"Devices found: {report.device_count}",
+        f"Conversations found: {report.conversation_count}",
+        f"Throughput: {report.packets_per_second:.2f} packets/sec",
+        f"CPU utilization: {report.cpu_utilization_percent:.1f}%",
+        "Top functions by cumulative time:",
+    ]
+    for index, item in enumerate(report.top_functions, start=1):
+        lines.append(
+            f"{index}. {item.function} | calls {item.primitive_calls}/{item.total_calls} | "
+            f"self {item.total_time_seconds:.3f}s | cum {item.cumulative_time_seconds:.3f}s"
+        )
+    return "\n".join(lines)
+
+
+def write_benchmark_report(report: BenchmarkReport, path: str | Path) -> Path:
+    output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(report.to_dict(), indent=2) + "\n", encoding="utf-8")
+    return output_path
+
+
+def _validate_generated_outputs(device_csv=None, conversation_csv=None, network_json=None):
+    """Validate generated output files against the regression contracts."""
+    errors = []
+    if device_csv:
+        errors.extend(validate_device_csv(os.path.join(OUTPUT_DIR, device_csv)))
+    if conversation_csv:
+        errors.extend(validate_conversation_csv(os.path.join(OUTPUT_DIR, conversation_csv)))
+    if network_json:
+        errors.extend(validate_network_json(os.path.join(OUTPUT_DIR, network_json)))
+    return errors
+
+def write_csv_report(device_info, output_csv):
     """Write device information to a CSV file."""
     try:
+        # Create outputs directory if it doesn't exist
         os.makedirs(OUTPUT_DIR, exist_ok=True)
-
+        
         output_path = os.path.join(OUTPUT_DIR, output_csv)
-        rows = build_device_rows(device_info)
-
-        with open(output_path, "w", newline="", encoding="utf-8") as csv_file:
-            writer = csv.DictWriter(csv_file, fieldnames=DEVICE_CSV_HEADERS)
-            writer.writeheader()
-            for row in rows:
-                writer.writerow(row)
-
-        if validate_output and not validate_csv_output(
-            output_path,
-            "device-csv-row.schema.json",
-            DEVICE_CSV_HEADERS,
-            "device CSV output",
-        ):
-            return False
-
+        
+        with open(output_path, "w", newline="") as csv_file:
+            writer = csv.writer(csv_file)
+            writer.writerow([
+                "MAC Address", 
+                "Vendor", 
+                "IP Address", 
+                "TCP Ports", 
+                "UDP Ports", 
+                "First Seen", 
+                "Last Seen", 
+                "Packet Count"
+            ])
+            
+            # Generate one row per MAC-IP-service combination
+            for mac, info in device_info.items():
+                vendor = info.get("vendor") or "Unknown"
+                
+                # For each IP address associated with this MAC
+                for ip, ip_info in info.get("ip_connections", {}).items():
+                    tcp_ports = sorted(ip_info.get("tcp_ports", []))
+                    udp_ports = sorted(ip_info.get("udp_ports", []))
+                    
+                    # Format TCP and UDP ports as comma-separated lists
+                    tcp_ports_str = ",".join(map(str, tcp_ports)) if tcp_ports else ""
+                    udp_ports_str = ",".join(map(str, udp_ports)) if udp_ports else ""
+                    
+                    # One row per IP address with combined ports
+                    writer.writerow([
+                        mac,
+                        vendor,
+                        ip,
+                        tcp_ports_str,
+                        udp_ports_str,
+                        ip_info.get("first_seen", ""),
+                        ip_info.get("last_seen", ""),
+                        ip_info.get("packet_count", 0)
+                    ])
+        
         print(f"\n[+] CSV report generated: {output_path}")
         return True
     except PermissionError:
@@ -738,28 +758,80 @@ def deduplicate_protocols(protocols_set):
     # Join back with commas
     return ",".join(unique_protocols)
 
-def write_conversation_report(conversation_data, output_csv, validate_output=False):
+def write_conversation_report(conversation_data, output_csv):
     """Write conversation data to a CSV file."""
     try:
+        # Create outputs directory if it doesn't exist
         os.makedirs(OUTPUT_DIR, exist_ok=True)
-
+        
         output_path = os.path.join(OUTPUT_DIR, output_csv)
-        rows = build_conversation_rows(conversation_data)
-
-        with open(output_path, "w", newline="", encoding="utf-8") as csv_file:
-            writer = csv.DictWriter(csv_file, fieldnames=CONVERSATION_CSV_HEADERS)
-            writer.writeheader()
-            for row in rows:
-                writer.writerow(row)
-
-        if validate_output and not validate_csv_output(
-            output_path,
-            "conversation-csv-row.schema.json",
-            CONVERSATION_CSV_HEADERS,
-            "conversation CSV output",
-        ):
-            return False
-
+        
+        with open(output_path, "w", newline="", encoding='utf-8') as csv_file:
+            writer = csv.writer(csv_file)
+            writer.writerow([
+                "Source IP",
+                "Source MAC",
+                "Source TCP Port",
+                "Source UDP Port",
+                "Target IP",
+                "Target MAC",
+                "Target TCP Port", 
+                "Target UDP Port",
+                "Protocol",
+                "Application Protocol",
+                "Packets A->B",
+                "Packets B->A",
+                "Bytes A->B",
+                "Bytes B->A",
+                "First Seen",
+                "Last Seen",
+                "Duration (seconds)",
+                "Conversation Status",
+                "TCP Flags",
+                "Stream ID",
+                "Frame Protocols",
+                "VLAN ID",
+                "DiffServ Field",
+                "IP Version"
+            ])
+            
+            # Generate one row per conversation
+            for conv_key, conv in conversation_data.items():
+                # Format timestamps as ISO strings if they exist
+                first_seen = datetime.fromtimestamp(conv['first_seen']).isoformat() if conv['first_seen'] else ""
+                last_seen = datetime.fromtimestamp(conv['last_seen']).isoformat() if conv['last_seen'] else ""
+                
+                # Format TCP flags and frame protocols as comma-separated lists
+                tcp_flags_str = ",".join(sorted(conv['tcp_flags'])) if conv['tcp_flags'] else ""
+                frame_protocols_str = deduplicate_protocols(conv['frame_protocols'])
+                
+                writer.writerow([
+                    conv['source_ip'],
+                    conv['source_mac'],
+                    conv['source_tcp_port'],
+                    conv['source_udp_port'],
+                    conv['target_ip'],
+                    conv['target_mac'],
+                    conv['target_tcp_port'],
+                    conv['target_udp_port'],
+                    conv['protocol'],
+                    conv['app_protocol'],
+                    conv['packets_a_to_b'],
+                    conv['packets_b_to_a'],
+                    conv['bytes_a_to_b'],
+                    conv['bytes_b_to_a'],
+                    first_seen,
+                    last_seen,
+                    round(conv['duration'], 3) if conv['duration'] else "",
+                    conv['conversation_status'],
+                    tcp_flags_str,
+                    conv['stream_id'],
+                    frame_protocols_str,
+                    conv['vlan_id'],
+                    conv['dsfield'],
+                    conv['ip_version']
+                ])
+        
         print(f"\n[+] Conversation report generated: {output_path}")
         return True
     except PermissionError:
@@ -770,24 +842,100 @@ def write_conversation_report(conversation_data, output_csv, validate_output=Fal
         print(f"\n[!] Error writing conversation CSV file: {e}")
         return False
 
-def write_json_report(device_info, conversation_data, pcap_file, output_json, validate_output=False):
+def write_json_report(device_info, conversation_data, pcap_file, output_json):
     """Write device and conversation data to a JSON file optimized for visualization."""
     try:
+        # Create outputs directory if it doesn't exist
         os.makedirs(OUTPUT_DIR, exist_ok=True)
-
+        
         output_path = os.path.join(OUTPUT_DIR, output_json)
-        network_data = build_network_data(device_info, conversation_data, pcap_file)
-
-        with open(output_path, "w", encoding="utf-8") as json_file:
+        
+        # Create nodes from device_info
+        nodes = []
+        for mac, info in device_info.items():
+            # Collect all IPs associated with this MAC
+            ips = list(info.get('ip_connections', {}).keys())
+            
+            # Collect all TCP and UDP ports across all IPs
+            all_tcp_ports = set()
+            all_udp_ports = set()
+            for ip_info in info.get('ip_connections', {}).values():
+                all_tcp_ports.update(ip_info.get('tcp_ports', set()))
+                all_udp_ports.update(ip_info.get('udp_ports', set()))
+            
+            # Format timestamps
+            first_seen = datetime.fromtimestamp(info['first_seen']).isoformat() if info.get('first_seen') else None
+            last_seen = datetime.fromtimestamp(info['last_seen']).isoformat() if info.get('last_seen') else None
+            
+            # Create node entry
+            node = {
+                "id": mac,
+                "label": mac,
+                "vendor": info.get('vendor') or "Unknown",
+                "ips": ips,
+                "tcp_ports": sorted(all_tcp_ports) if all_tcp_ports else [],
+                "udp_ports": sorted(all_udp_ports) if all_udp_ports else [],
+                "packet_count": info.get('packet_count', 0),
+                "first_seen": first_seen,
+                "last_seen": last_seen
+            }
+            nodes.append(node)
+        
+        # Create links from conversation_data
+        links = []
+        for conv_key, conv in conversation_data.items():
+            # Format timestamps
+            first_seen = datetime.fromtimestamp(conv['first_seen']).isoformat() if conv.get('first_seen') else None
+            last_seen = datetime.fromtimestamp(conv['last_seen']).isoformat() if conv.get('last_seen') else None
+            
+            # Create link entry
+            link = {
+                "source": conv['source_mac'],
+                "target": conv['target_mac'],
+                "source_ip": conv['source_ip'],
+                "target_ip": conv['target_ip'],
+                "protocol": conv['protocol'],
+                "app_protocol": conv['app_protocol'],
+                "source_tcp_port": conv['source_tcp_port'],
+                "target_tcp_port": conv['target_tcp_port'],
+                "source_udp_port": conv['source_udp_port'],
+                "target_udp_port": conv['target_udp_port'],
+                "packets_a_to_b": conv['packets_a_to_b'],
+                "packets_b_to_a": conv['packets_b_to_a'],
+                "bytes_a_to_b": conv['bytes_a_to_b'],
+                "bytes_b_to_a": conv['bytes_b_to_a'],
+                "first_seen": first_seen,
+                "last_seen": last_seen,
+                "duration": round(conv['duration'], 3) if conv.get('duration') else None,
+                "conversation_status": conv['conversation_status'],
+                "tcp_flags": sorted(list(conv['tcp_flags'])) if conv.get('tcp_flags') else [],
+                "stream_id": conv['stream_id'],
+                "frame_protocols": deduplicate_protocols(conv['frame_protocols']),
+                "vlan_id": conv['vlan_id'],
+                "dsfield": conv['dsfield'],
+                "ip_version": conv['ip_version']
+            }
+            links.append(link)
+        
+        # Create metadata
+        metadata = {
+            "generated_at": datetime.now().isoformat(),
+            "pcap_file": os.path.basename(pcap_file),
+            "total_nodes": len(nodes),
+            "total_links": len(links)
+        }
+        
+        # Create final JSON structure
+        network_data = {
+            "metadata": metadata,
+            "nodes": nodes,
+            "links": links
+        }
+        
+        # Write JSON to file
+        with open(output_path, 'w') as json_file:
             json.dump(network_data, json_file, indent=2)
-
-        if validate_output and not validate_json_output(
-            output_path,
-            "network-data.schema.json",
-            "network JSON output",
-        ):
-            return False
-
+        
         print(f"\n[+] JSON report generated: {output_path}")
         return True
     except PermissionError:
@@ -799,6 +947,10 @@ def write_json_report(device_info, conversation_data, pcap_file, output_json, va
         return False
 
 def main():
+    # Check dependencies before proceeding
+    if not check_tshark_installation():
+        sys.exit(1)
+        
     parser = argparse.ArgumentParser(description="PCAP Asset and Conversation Discovery Tool")
     parser.add_argument("pcap_file", help="Path to the pcap file", nargs='?')
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
@@ -806,17 +958,15 @@ def main():
     parser.add_argument("--output", help="Output base filename (default: <pcap_name>)")
     parser.add_argument("--format", choices=["csv", "json", "both"], default="both", 
                        help="Output format: csv, json, or both (default: both)")
-    parser.add_argument("--validate-output", action="store_true", help="Validate generated output against the canonical JSON Schema contracts")
+    parser.add_argument("--validate-output", action="store_true", help="Validate generated output files against the regression contracts")
+    parser.add_argument("--benchmark", action="store_true", help="Profile parsing and write a benchmark report")
+    parser.add_argument("--benchmark-output", help="Path for benchmark JSON output (default: outputs/<base>-benchmark.json)")
     args = parser.parse_args()
 
     # Show download instructions if requested
     if args.download_instructions:
         download_oui_instructions()
         return
-
-    # Check dependencies before proceeding
-    if not check_tshark_installation():
-        sys.exit(1)
 
     # Check if OUI database file exists
     if not os.path.exists(OUI_FILE) and not os.path.exists(OUI_CSV_FILE):
@@ -829,6 +979,18 @@ def main():
 
     if not os.path.isfile(args.pcap_file):
         print(f"[-] File not found: {args.pcap_file}")
+        return
+
+    # Generate output filenames
+    base = os.path.splitext(os.path.basename(args.pcap_file))[0]
+    base_output = args.output if args.output else base
+
+    if args.benchmark:
+        benchmark_report = collect_benchmark_report(args.pcap_file, debug=args.debug)
+        benchmark_output = args.benchmark_output or os.path.join(OUTPUT_DIR, f"{base_output}-benchmark.json")
+        benchmark_path = write_benchmark_report(benchmark_report, benchmark_output)
+        print(render_benchmark_report(benchmark_report))
+        print(f"\n[+] Benchmark report written: {benchmark_path}")
         return
 
     # Extract both device info and conversation data
@@ -850,25 +1012,32 @@ def main():
         print("\n[-] No devices found.")
         return
 
-    # Generate output filenames
-    base = os.path.splitext(os.path.basename(args.pcap_file))[0]
-    base_output = args.output if args.output else base
-    
     device_csv = f"{base_output}-device_info.csv"
     conversation_csv = f"{base_output}-conversation_info.csv"
     network_json = f"{base_output}-network_data.json"
     
     # Write reports based on format option
-    success = True
     if args.format in ["csv", "both"]:
-        success &= write_csv_report(device_info, device_csv, validate_output=args.validate_output)
-        success &= write_conversation_report(conversation_data, conversation_csv, validate_output=args.validate_output)
+        write_csv_report(device_info, device_csv)
+        write_conversation_report(conversation_data, conversation_csv)
     
     if args.format in ["json", "both"]:
-        success &= write_json_report(device_info, conversation_data, args.pcap_file, network_json, validate_output=args.validate_output)
+        write_json_report(device_info, conversation_data, args.pcap_file, network_json)
 
-    if not success:
-        sys.exit(1)
+    if args.validate_output:
+        validation_errors = []
+        if args.format in ["csv", "both"]:
+            validation_errors.extend(_validate_generated_outputs(device_csv=device_csv, conversation_csv=conversation_csv))
+        if args.format in ["json", "both"]:
+            validation_errors.extend(_validate_generated_outputs(network_json=network_json))
+
+        if validation_errors:
+            print("\n[!] Output validation failed:")
+            for error in validation_errors:
+                print(f"[!] {error}")
+            sys.exit(1)
+
+        print("\n[+] Output validation passed")
 
 if __name__ == "__main__":
     main()

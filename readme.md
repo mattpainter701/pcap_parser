@@ -55,6 +55,9 @@ python pcap_parser.py path/to/capture.pcap --output network_analysis
 
 # Enable detailed debug output
 python pcap_parser.py path/to/capture.pcap --debug
+
+# Profile a capture and write a benchmark report
+python pcap_parser.py path/to/capture.pcap --benchmark
 ```
 
 ## Output Files
@@ -121,6 +124,17 @@ Breaking changes require a schema version bump and coordinated downstream migrat
 4. The script analyzes bidirectional traffic flows and determines conversation status
 5. It generates three detailed reports (device CSV, conversation CSV, and network JSON)
 6. The JSON output is specially formatted for D3-based network visualizations
+
+## Regression fixtures and validation
+- `fixtures/regression_manifest.json` is the starter manifest for golden captures
+- `pytest` runs the regression harness and validates committed fixture outputs
+- `python pcap_parser.py <capture.pcapng> --validate-output` validates generated CSV/JSON outputs against the current contracts
+
+To add a new fixture:
+1. Drop the PCAP into `pcaps/`
+2. Generate the desired golden outputs
+3. Add the fixture entry to `fixtures/regression_manifest.json`
+4. Keep the golden output paths stable so regression diffs stay meaningful
 
 ## Conversation Status Detection
 The tool uses a combination of TCP flags and packet flow analysis to determine conversation status:
