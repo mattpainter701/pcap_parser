@@ -41,12 +41,12 @@ The architecture should support Python as the reference implementation and Rust 
 **Goal:** Lock down canonical JSON and CSV schemas so downstream consumers can depend on stable output.
 
 **Tasks:**
-- Define JSON schema for device records: mac, vendor, ip_addresses, tcp_ports, udp_ports, first_seen, last_seen, packet_count, vlan_ids, diffserv_values
-- Define JSON schema for conversation records: src_mac, dst_mac, src_ip, dst_ip, protocol, src_port, dst_port, packets_a_to_b, bytes_a_to_b, packets_b_to_a, bytes_b_to_a, status, tcp_flags, vlan_ids, duration_seconds
-- Define CSV column specification with header contracts
-- Write JSON Schema (draft-07) validation files
+- Define JSON schema for device records: mac, vendor, ips, tcp_ports, udp_ports, packet_count, first_seen, last_seen
+- Define JSON schema for conversation records: source/target MAC and IP, protocol, app_protocol, ports, packet/byte counters, timestamps, duration, conversation_status, tcp_flags, stream_id, frame_protocols, vlan_id, dsfield, ip_version
+- Define CSV column specification with header contracts for device and conversation reports
+- Write JSON Schema (draft-07) validation files and a schema manifest
 - Add --validate-output flag that checks generated output against schema
-- Document schema with examples for each field
+- Document every field with examples
 - Version the schema (v1.0.0) with a migration policy
 
 **Acceptance:** Every run produces output that validates against the schema. Breaking schema changes require a version bump.
