@@ -1,0 +1,221 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/mattpainter701/pcap_parser/schemas/v1.0.0/conversation-csv-row.schema.json",
+  "title": "PCAP Parser Conversation CSV Row Schema",
+  "description": "Canonical CSV row schema for conversation reports. Each array item corresponds to one CSV row after the header line is removed.",
+  "type": "array",
+  "minItems": 0,
+  "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "Source IP",
+      "Source MAC",
+      "Source TCP Port",
+      "Source UDP Port",
+      "Target IP",
+      "Target MAC",
+      "Target TCP Port",
+      "Target UDP Port",
+      "Protocol",
+      "Application Protocol",
+      "Packets A->B",
+      "Packets B->A",
+      "Bytes A->B",
+      "Bytes B->A",
+      "First Seen",
+      "Last Seen",
+      "Duration (seconds)",
+      "Conversation Status",
+      "TCP Flags",
+      "Stream ID",
+      "Frame Protocols",
+      "VLAN ID",
+      "DiffServ Field",
+      "IP Version"
+    ],
+    "properties": {
+      "Source IP": {
+        "type": "string",
+        "description": "CSV field encoded as text.",
+        "examples": [
+          "10.47.178.9"
+        ]
+      },
+      "Source MAC": {
+        "type": "string",
+        "description": "CSV field encoded as text.",
+        "examples": [
+          "58:bf:ea:be:b3:80"
+        ]
+      },
+      "Source TCP Port": {
+        "type": "string",
+        "description": "CSV field encoded as text.",
+        "examples": [
+          "61622",
+          ""
+        ]
+      },
+      "Source UDP Port": {
+        "type": "string",
+        "description": "CSV field encoded as text.",
+        "examples": [
+          "49236",
+          ""
+        ]
+      },
+      "Target IP": {
+        "type": "string",
+        "description": "CSV field encoded as text.",
+        "examples": [
+          "10.47.178.1"
+        ]
+      },
+      "Target MAC": {
+        "type": "string",
+        "description": "CSV field encoded as text.",
+        "examples": [
+          "00:11:22:33:44:55"
+        ]
+      },
+      "Target TCP Port": {
+        "type": "string",
+        "description": "CSV field encoded as text.",
+        "examples": [
+          "443",
+          "80"
+        ]
+      },
+      "Target UDP Port": {
+        "type": "string",
+        "description": "CSV field encoded as text.",
+        "examples": [
+          "53",
+          ""
+        ]
+      },
+      "Protocol": {
+        "type": "string",
+        "description": "CSV field encoded as text.",
+        "examples": [
+          "TCP",
+          "UDP"
+        ]
+      },
+      "Application Protocol": {
+        "type": "string",
+        "description": "CSV field encoded as text.",
+        "examples": [
+          "TLS",
+          "DNS"
+        ]
+      },
+      "Packets A->B": {
+        "type": "string",
+        "description": "CSV field encoded as text.",
+        "examples": [
+          "12"
+        ]
+      },
+      "Packets B->A": {
+        "type": "string",
+        "description": "CSV field encoded as text.",
+        "examples": [
+          "9"
+        ]
+      },
+      "Bytes A->B": {
+        "type": "string",
+        "description": "CSV field encoded as text.",
+        "examples": [
+          "12345"
+        ]
+      },
+      "Bytes B->A": {
+        "type": "string",
+        "description": "CSV field encoded as text.",
+        "examples": [
+          "6789"
+        ]
+      },
+      "First Seen": {
+        "type": "string",
+        "description": "CSV field encoded as text.",
+        "examples": [
+          "2024-03-17T12:34:56.123456"
+        ]
+      },
+      "Last Seen": {
+        "type": "string",
+        "description": "CSV field encoded as text.",
+        "examples": [
+          "2024-03-17T12:35:56.123456"
+        ]
+      },
+      "Duration (seconds)": {
+        "type": "string",
+        "description": "CSV field encoded as text.",
+        "examples": [
+          "60.000",
+          ""
+        ]
+      },
+      "Conversation Status": {
+        "type": "string",
+        "description": "CSV field encoded as text.",
+        "examples": [
+          "request-accepted",
+          "response"
+        ]
+      },
+      "TCP Flags": {
+        "type": "string",
+        "description": "CSV field encoded as text.",
+        "examples": [
+          "SYN,ACK",
+          "RST"
+        ]
+      },
+      "Stream ID": {
+        "type": "string",
+        "description": "CSV field encoded as text.",
+        "examples": [
+          "42",
+          ""
+        ]
+      },
+      "Frame Protocols": {
+        "type": "string",
+        "description": "CSV field encoded as text.",
+        "examples": [
+          "eth:ethertype:ip:tcp"
+        ]
+      },
+      "VLAN ID": {
+        "type": "string",
+        "description": "CSV field encoded as text.",
+        "examples": [
+          "240",
+          ""
+        ]
+      },
+      "DiffServ Field": {
+        "type": "string",
+        "description": "CSV field encoded as text.",
+        "examples": [
+          "0x00",
+          ""
+        ]
+      },
+      "IP Version": {
+        "type": "string",
+        "description": "CSV field encoded as text.",
+        "examples": [
+          "4",
+          "6"
+        ]
+      }
+    }
+  }
+}

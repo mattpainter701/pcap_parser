@@ -1,0 +1,456 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/mattpainter701/pcap_parser/schemas/v1.0.0/network-data.schema.json",
+  "title": "PCAP Parser Network Data Schema",
+  "description": "Canonical JSON output schema for the network graph export.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "metadata",
+    "nodes",
+    "links"
+  ],
+  "properties": {
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "generated_at",
+        "pcap_file",
+        "total_nodes",
+        "total_links"
+      ],
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "const": "1.0.0",
+          "examples": [
+            "1.0.0"
+          ]
+        },
+        "generated_at": {
+          "type": "string",
+          "description": "ISO 8601 generation timestamp.",
+          "examples": [
+            "2024-03-17T12:34:56.123456"
+          ]
+        },
+        "pcap_file": {
+          "type": "string",
+          "examples": [
+            "capture.pcapng"
+          ]
+        },
+        "total_nodes": {
+          "type": "integer",
+          "minimum": 0,
+          "examples": [
+            2
+          ]
+        },
+        "total_links": {
+          "type": "integer",
+          "minimum": 0,
+          "examples": [
+            1
+          ]
+        }
+      }
+    },
+    "nodes": {
+      "type": "array",
+      "minItems": 0,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "label",
+          "vendor",
+          "ips",
+          "tcp_ports",
+          "udp_ports",
+          "packet_count",
+          "first_seen",
+          "last_seen"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "examples": [
+              "58:bf:ea:be:b3:80"
+            ]
+          },
+          "label": {
+            "type": "string",
+            "examples": [
+              "58:bf:ea:be:b3:80"
+            ]
+          },
+          "vendor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "examples": [
+              "Cisco Systems, Inc"
+            ]
+          },
+          "ips": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "examples": [
+              [
+                "10.47.178.9"
+              ]
+            ]
+          },
+          "tcp_ports": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            },
+            "examples": [
+              [
+                61622,
+                49236
+              ]
+            ]
+          },
+          "udp_ports": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            },
+            "examples": [
+              [
+                53,
+                123
+              ]
+            ]
+          },
+          "packet_count": {
+            "type": "integer",
+            "minimum": 0,
+            "examples": [
+              293
+            ]
+          },
+          "first_seen": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last_seen": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "links": {
+      "type": "array",
+      "minItems": 0,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "source",
+          "target",
+          "source_ip",
+          "target_ip",
+          "protocol",
+          "app_protocol",
+          "source_tcp_port",
+          "target_tcp_port",
+          "source_udp_port",
+          "target_udp_port",
+          "packets_a_to_b",
+          "packets_b_to_a",
+          "bytes_a_to_b",
+          "bytes_b_to_a",
+          "first_seen",
+          "last_seen",
+          "duration",
+          "conversation_status",
+          "tcp_flags",
+          "stream_id",
+          "frame_protocols",
+          "vlan_id",
+          "dsfield",
+          "ip_version"
+        ],
+        "properties": {
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source_ip": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "target_ip": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "protocol": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "app_protocol": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source_tcp_port": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "target_tcp_port": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source_udp_port": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "target_udp_port": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "packets_a_to_b": {
+            "type": "integer",
+            "minimum": 0,
+            "examples": [
+              12
+            ]
+          },
+          "packets_b_to_a": {
+            "type": "integer",
+            "minimum": 0,
+            "examples": [
+              9
+            ]
+          },
+          "bytes_a_to_b": {
+            "type": "integer",
+            "minimum": 0,
+            "examples": [
+              12345
+            ]
+          },
+          "bytes_b_to_a": {
+            "type": "integer",
+            "minimum": 0,
+            "examples": [
+              6789
+            ]
+          },
+          "first_seen": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last_seen": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "duration": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "conversation_status": {
+            "type": "string",
+            "enum": [
+              "unknown",
+              "request-accepted",
+              "request-rejected",
+              "response",
+              "no-response"
+            ],
+            "examples": [
+              "request-accepted"
+            ]
+          },
+          "tcp_flags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "examples": [
+              [
+                "SYN",
+                "ACK"
+              ]
+            ]
+          },
+          "stream_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "frame_protocols": {
+            "type": "string",
+            "examples": [
+              "eth:ethertype:ip:tcp"
+            ]
+          },
+          "vlan_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "dsfield": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ip_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

@@ -14,10 +14,12 @@ This Python script parses PCAP files to discover network devices, identify vendo
 - Extracts VLAN IDs and DiffServ fields
 - Captures TCP flag information (SYN, ACK, RST, FIN)
 - Generates detailed CSV and JSON reports optimized for visualization
+- Validates output against versioned JSON Schema contracts with `--validate-output`
   
 ## Requirements
 - Python 3.x
 - PyShark library
+- jsonschema (only needed when output validation is enabled)
 
 ## Installation
 ```bash
@@ -45,6 +47,9 @@ python pcap_parser.py path/to/capture.pcap --format json
 # Generate only CSV reports
 python pcap_parser.py path/to/capture.pcap --format csv
 
+# Validate generated outputs against the canonical schema contracts
+python pcap_parser.py path/to/capture.pcap --validate-output
+
 # Specify a custom output filename base
 python pcap_parser.py path/to/capture.pcap --output network_analysis
 
@@ -56,34 +61,58 @@ python pcap_parser.py path/to/capture.pcap --debug
 The script generates the following output files in the `outputs` directory:
 
 ### Device Information CSV
-- MAC Address: The hardware address of the device
-- Vendor: The manufacturer of the device (based on MAC OUI)
-- IP Address: The IP address associated with the MAC
-- TCP Ports: Comma-separated list of TCP ports (e.g., "80,443,8080")
-- UDP Ports: Comma-separated list of UDP ports (e.g., "53,123")
-- First Seen: Timestamp of first packet for this device
-- Last Seen: Timestamp of last packet for this device
-- Packet Count: Number of packets for this device
+Canonical header order:
+1. `MAC Address`
+2. `Vendor`
+3. `IP Address`
+4. `TCP Ports`
+5. `UDP Ports`
+6. `First Seen`
+7. `Last Seen`
+8. `Packet Count`
 
 ### Conversation Information CSV
-Detailed analysis of each conversation between pairs of devices:
-- Source/Target IP and MAC addresses
-- Protocol information (transport and application layer)
-- Port numbers (TCP/UDP)
-- Traffic statistics (packets and bytes in both directions)
-- Timestamps and duration
-- Conversation status
-- TCP flags
-- VLAN IDs and DiffServ fields
-- Frame protocols
+Canonical header order:
+1. `Source IP`
+2. `Source MAC`
+3. `Source TCP Port`
+4. `Source UDP Port`
+5. `Target IP`
+6. `Target MAC`
+7. `Target TCP Port`
+8. `Target UDP Port`
+9. `Protocol`
+10. `Application Protocol`
+11. `Packets A->B`
+12. `Packets B->A`
+13. `Bytes A->B`
+14. `Bytes B->A`
+15. `First Seen`
+16. `Last Seen`
+17. `Duration (seconds)`
+18. `Conversation Status`
+19. `TCP Flags`
+20. `Stream ID`
+21. `Frame Protocols`
+22. `VLAN ID`
+23. `DiffServ Field`
+24. `IP Version`
 
 ### Network Data JSON
 JSON format optimized for D3 visualizations:
-- Nodes representing devices with MAC addresses, vendor info, and IPs
+- Nodes representing devices with MAC addresses, vendor info, IPs, and port sets
 - Links representing conversations between devices
-- Complete traffic flow information
-- Connection states and statistics
-- Perfect for building interactive network visualizations
+- Metadata includes `schema_version`, generation time, source PCAP, and counts
+- Schema is versioned at `1.0.0`
+
+## Schema Contract
+Canonical schema files live in `schemas/v1.0.0/`:
+- `device-csv-row.schema.json`
+- `conversation-csv-row.schema.json`
+- `network-data.schema.json`
+- `schema-manifest.json`
+
+Breaking changes require a schema version bump and coordinated downstream migration.
 
 ## How It Works
 1. The script loads the IEEE OUI database to map MAC address prefixes to vendors

@@ -1,0 +1,84 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/mattpainter701/pcap_parser/schemas/v1.0.0/device-csv-row.schema.json",
+  "title": "PCAP Parser Device CSV Row Schema",
+  "description": "Canonical CSV row schema for device reports. Each array item corresponds to one CSV row after the header line is removed.",
+  "type": "array",
+  "minItems": 0,
+  "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "MAC Address",
+      "Vendor",
+      "IP Address",
+      "TCP Ports",
+      "UDP Ports",
+      "First Seen",
+      "Last Seen",
+      "Packet Count"
+    ],
+    "properties": {
+      "MAC Address": {
+        "type": "string",
+        "description": "CSV field encoded as text.",
+        "examples": [
+          "58:bf:ea:be:b3:80"
+        ]
+      },
+      "Vendor": {
+        "type": "string",
+        "description": "CSV field encoded as text.",
+        "examples": [
+          "Cisco Systems, Inc",
+          "Google, Inc."
+        ]
+      },
+      "IP Address": {
+        "type": "string",
+        "description": "CSV field encoded as text.",
+        "examples": [
+          "10.47.178.9",
+          "172.16.16.214"
+        ]
+      },
+      "TCP Ports": {
+        "type": "string",
+        "description": "CSV field encoded as text.",
+        "examples": [
+          "61622",
+          "8008,8009"
+        ]
+      },
+      "UDP Ports": {
+        "type": "string",
+        "description": "CSV field encoded as text.",
+        "examples": [
+          "53,123",
+          ""
+        ]
+      },
+      "First Seen": {
+        "type": "string",
+        "description": "CSV field encoded as text.",
+        "examples": [
+          "2024-03-17T12:34:56.123456"
+        ]
+      },
+      "Last Seen": {
+        "type": "string",
+        "description": "CSV field encoded as text.",
+        "examples": [
+          "2024-03-17T12:34:56.123456"
+        ]
+      },
+      "Packet Count": {
+        "type": "string",
+        "description": "CSV field encoded as text.",
+        "examples": [
+          "293"
+        ]
+      }
+    }
+  }
+}

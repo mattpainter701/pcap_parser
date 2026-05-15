@@ -1,0 +1,51 @@
+{
+  "schema_version": "1.0.0",
+  "policy": "Breaking changes require a schema version bump and coordinated downstream migration.",
+  "artifacts": {
+    "device_csv_rows": {
+      "headers": [
+        "MAC Address",
+        "Vendor",
+        "IP Address",
+        "TCP Ports",
+        "UDP Ports",
+        "First Seen",
+        "Last Seen",
+        "Packet Count"
+      ],
+      "schema_file": "device-csv-row.schema.json"
+    },
+    "conversation_csv_rows": {
+      "headers": [
+        "Source IP",
+        "Source MAC",
+        "Source TCP Port",
+        "Source UDP Port",
+        "Target IP",
+        "Target MAC",
+        "Target TCP Port",
+        "Target UDP Port",
+        "Protocol",
+        "Application Protocol",
+        "Packets A->B",
+        "Packets B->A",
+        "Bytes A->B",
+        "Bytes B->A",
+        "First Seen",
+        "Last Seen",
+        "Duration (seconds)",
+        "Conversation Status",
+        "TCP Flags",
+        "Stream ID",
+        "Frame Protocols",
+        "VLAN ID",
+        "DiffServ Field",
+        "IP Version"
+      ],
+      "schema_file": "conversation-csv-row.schema.json"
+    },
+    "network_json": {
+      "schema_file": "network-data.schema.json"
+    }
+  }
+}
