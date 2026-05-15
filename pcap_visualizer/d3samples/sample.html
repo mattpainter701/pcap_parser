@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>D3.js Network Conversations</title>
+  <style>
+    body { font-family: Arial, sans-serif; }
+    .link { stroke: #aaa; }
+    .node circle { stroke: #fff; stroke-width: 1.5px; }
+    .tooltip {
+      position: absolute;
+      text-align: center;
+      padding: 5px;
+      font-size: 12px;
+      background: #fff;
+      border: 1px solid #ccc;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <svg width="960" height="600"></svg>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script>
+    const svg = d3.select("svg");
+    const width = +svg.attr("width");
+    const height = +svg.attr("height");
+
+    const color = d3.scaleOrdinal(d3.schemeCategory10);
+
+    const tooltip = d3.select("body").append("div")
+      .attr("class", "tooltip")
+      .style("opacity", 0);
+
+    // Load your JSON data here
+    d3.json("graph.json").then(function(graph) {
+
+      const simulation = d3.forceSimulation(graph.nodes)
+        .force("link", d3.forceLink(graph.links).id(d => d.id).distance(150))
+        .force("charge", d3.forceManyBody().strength(-400))
+        .force("center", d3.forceCenter(width / 2, height / 2));
+
+      // Link (conversation)
+      const link = svg.append("g")
+          .attr("stroke", "#999")
+          .attr("stroke-opacity", 0.6)
+        .selectAll("line")
+        .data(graph.links)
+        .join("line")
+          .attr("stroke-width", d => {
+            // Thickness based on total packets/bytes (optional)
+            const totalBytes = d.bytes_a_to_b + d.bytes_b_to_a;
+            return Math.max(1, totalBytes / 10000);  // Scale as needed
+          })
+          .attr("stroke", d => {
+            // Color based on conversation status (optional)
+            switch (d.conversation_status) {
+              case "request-accepted": return "green";
+              case "request-rejected": return "red";
+              case "no-response": return "orange";
+              default: return "#999";
+            }
+          });
+
+      // Node (asset)
+      const node = svg.append("g")
+          .attr("stroke", "#fff")
+          .attr("stroke-width", 1.5)
+        .selectAll("circle")
+        .data(graph.nodes)
+        .join("circle")
+          .attr("r", 10)
+          .attr("fill", d => color(d.group))
+          .call(drag(simulation));
+
+      // Tooltip handlers for nodes
+      node.on("mouseover", (event, d) => {
+          tooltip.transition().duration(200).style("opacity", .9);
+          tooltip.html(
+            `<strong>${d.label}</strong><br/>
+             Vendor: ${d.vendor}<br/>
+             IP: ${d.id}`
+          ).style("left", (event.pageX + 10) + "px")
+           .style("top", (event.pageY - 28) + "px");
+        })
+        .on("mouseout", () => {
+          tooltip.transition().duration(500).style("opacity", 0);
+        });
+
+      // Tooltip handlers for links
+      link.on("mouseover", (event, d) => {
+          tooltip.transition().duration(200).style("opacity", .9);
+          tooltip.html(
+            `<strong>Conversation</strong><br/>
+             Source: ${d.source}<br/>
+             Target: ${d.target}<br/>
+             Protocol: ${d.protocol}<br/>
+             App: ${d.app_protocol}<br/>
+             A→B: ${d.packets_a_to_b} packets (${d.bytes_a_to_b} bytes)<br/>
+             B→A: ${d.packets_b_to_a} packets (${d.bytes_b_to_a} bytes)<br/>
+             Status: ${d.conversation_status}<br/>
+             Flags: ${d.tcp_flags.join(", ")}<br/>
+             Duration: ${d.duration} sec`
+          ).style("left", (event.pageX + 10) + "px")
+           .style("top", (event.pageY - 28) + "px");
+        })
+        .on("mouseout", () => {
+          tooltip.transition().duration(500).style("opacity", 0);
+        });
+
+      simulation.on("tick", () => {
+        link
+            .attr("x1", d => d.source.x)
+            .attr("y1", d => d.source.y)
+            .attr("x2", d => d.target.x)
+            .attr("y2", d => d.target.y);
+
+        node
+            .attr("cx", d => d.x)
+            .attr("cy", d => d.y);
+      });
+
+      function drag(simulation) {
+        function dragstarted(event, d) {
+          if (!event.active) simulation.alphaTarget(0.3).restart();
+          d.fx = d.x;
+          d.fy = d.y;
+        }
+
+        function dragged(event, d) {
+          d.fx = event.x;
+          d.fy = event.y;
+        }
+
+        function dragended(event, d) {
+          if (!event.active) simulation.alphaTarget(0);
+          d.fx = null;
+          d.fy = null;
+        }
+
+        return d3.drag()
+            .on("start", dragstarted)
+            .on("drag", dragged)
+            .on("end", dragended);
+      }
+
+    }).catch(err => {
+      console.error("Error loading graph data:", err);
+    });
+  </script>
+</body>
+</html>

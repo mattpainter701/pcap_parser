@@ -1,0 +1,1462 @@
+{% extends "base.html" %}
+
+{# Set full width flag for this template #}
+{% set full_width = True %}
+
+{% block title %}Network Visualization - {{ filename }}{% endblock %}
+
+{% block head %}
+<!-- D3.js from CDN -->
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+<style>
+    @import url("https://fonts.googleapis.com/css?family=Roboto+Condensed:400,700");
+    
+    #network-container {
+        width: 100%;
+        height: calc(100vh - 180px);
+        position: relative;
+        overflow: hidden;
+        background-color: #f8fafc;
+        border: 1px solid #ddd;
+        border-radius: 8px;
+    }
+    
+    /* D3.js specific styles */
+    .node {
+        stroke: #fff;
+        stroke-width: 1px; /* Thinner border */
+        cursor: pointer;
+        fill: #d8d8d8; /* Lighter gray to match image */
+    }
+    
+    .link {
+        stroke-opacity: 0.8;
+        fill: none;
+        cursor: pointer;
+    }
+    
+    .node-label {
+        font-family: "Roboto", "Arial", sans-serif;
+        font-size: 11px; /* Slightly smaller text */
+        pointer-events: none;
+        text-anchor: middle;
+        dominant-baseline: middle; /* Better vertical centering */
+        font-weight: 500;
+        fill: #333;
+    }
+    
+    .link-label {
+        font-family: "Roboto", "Arial", sans-serif;
+        font-size: 10px;
+        pointer-events: none;
+        text-anchor: middle;
+        fill: #555;
+        font-style: italic;
+    }
+    
+    /* Connection status styles - adjusted to match image */
+    .link.request-accepted {
+        stroke: #4ade80; /* Green for accepted */
+    }
+    
+    .link.response, .link.established {
+        stroke: #60a5fa; /* Lighter blue for responses */
+        stroke-dasharray: 3, 3; /* Smaller dashes */
+    }
+    
+    .link.request-rejected, .link.no-response {
+        stroke: #f87171; /* Red for rejected */
+    }
+    
+    .link.request {
+        stroke: #f97316; /* Orange for requests - matching image */
+    }
+    
+    /* Tooltip styles */
+    .tooltip {
+        position: absolute;
+        text-align: left;
+        padding: 10px;
+        font-size: 12px;
+        background: white;
+        border-radius: 8px;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+        pointer-events: none;
+        z-index: 1000;
+        max-width: 300px;
+        opacity: 0;
+        transition: opacity 0.3s;
+    }
+    
+    .tooltip h4 {
+        margin: 0 0 5px 0;
+        font-size: 14px;
+        font-weight: bold;
+    }
+    
+    .tooltip table {
+        border-collapse: collapse;
+        width: 100%;
+        margin-top: 5px;
+    }
+    
+    .tooltip th, .tooltip td {
+        padding: 3px;
+        text-align: left;
+        border-bottom: 1px solid #eee;
+        font-size: 11px;
+    }
+    
+    .tooltip th {
+        color: #666;
+        width: 40%;
+    }
+    
+    /* Controls styles */
+    .controls {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        background: white;
+        border-radius: 8px;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+        padding: 10px;
+        z-index: 100;
+        max-width: 200px;
+    }
+    
+    .search-box {
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        z-index: 10;
+        background: white;
+        border-radius: 8px;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        padding: 12px;
+    }
+    
+    .legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 10px;
+    }
+    
+    .legend-item {
+        display: flex;
+        align-items: center;
+        margin-right: 15px;
+    }
+    
+    .legend-color {
+        width: 15px;
+        height: 2px;
+        margin-right: 5px;
+    }
+    
+    /* Context menu styles */
+    .context-menu {
+        position: absolute;
+        background: white;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        padding: 5px 0;
+        z-index: 1000;
+    }
+    
+    .context-menu-item {
+        padding: 8px 12px;
+        cursor: pointer;
+        font-size: 14px;
+        color: #333;
+    }
+    
+    .context-menu-item:hover {
+        background-color: #f5f5f5;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-4 py-4">
+    <div class="flex justify-between items-center mb-4">
+        <h1 class="text-2xl font-bold">Network Visualization: {{ filename }}</h1>
+        <div class="space-x-2">
+            <a href="{{ url_for('index') }}" class="btn btn-secondary">
+                <i class="fas fa-arrow-left mr-2"></i>Back to Files
+            </a>
+        </div>
+</div>
+
+    <div class="grid grid-cols-1 gap-4">
+        <div class="card">
+            <div class="card-body p-0">
+                <!-- Network Container -->
+                <div id="network-container">
+                    <!-- D3.js will render here -->
+                    <div class="search-box">
+                        <div class="flex">
+                            <input id="search-input" type="text" placeholder="Search nodes..." class="input input-bordered w-full max-w-xs" />
+                            <button id="search-button" class="btn btn-primary ml-2">
+                                <i class="fas fa-search"></i>
+                            </button>
+            </div>
+        </div>
+        
+                    <div class="controls">
+                        <div class="flex flex-col space-y-2">
+                            <button id="reset-zoom" class="btn btn-secondary btn-sm">
+                                <i class="fas fa-expand mr-1"></i>Reset View
+            </button>
+                            <button id="toggle-labels" class="btn btn-secondary btn-sm">
+                                <i class="fas fa-tag mr-1"></i>Toggle Labels
+            </button>
+                            <button id="toggle-physics" class="btn btn-secondary btn-sm">
+                                <i class="fas fa-atom mr-1"></i>Toggle Physics
+                            </button>
+                            <button id="btn-fullscreen" class="btn btn-secondary btn-sm">
+                                <i class="fas fa-expand-arrows-alt mr-1"></i>Fullscreen
+            </button>
+    </div>
+    
+                        <div class="mt-4">
+                            <h3 class="font-medium mb-2 text-sm">Layout:</h3>
+                            <div class="flex flex-col space-y-1">
+                                <button id="layout-force" class="btn btn-primary btn-sm">
+                                    <i class="fas fa-project-diagram mr-1"></i>Force Directed
+            </button>
+                                <button id="layout-radial" class="btn btn-secondary btn-sm">
+                                    <i class="fas fa-dot-circle mr-1"></i>Radial
+            </button>
+                                <button id="layout-group" class="btn btn-secondary btn-sm">
+                                    <i class="fas fa-sitemap mr-1"></i>By Group
+            </button>
+                                <button id="layout-subnet" class="btn btn-secondary btn-sm">
+                                    <i class="fas fa-sitemap mr-1"></i>By Subnet
+            </button>
+    </div>
+</div>
+
+                        <div class="mt-4">
+                            <h3 class="font-medium mb-2 text-sm">Legend:</h3>
+    <div class="legend">
+                                <div class="legend-item">
+                                    <div class="legend-color" style="background-color: #4ade80;"></div>
+                                    <span class="text-xs">Request Accepted</span>
+        </div>
+                                <div class="legend-item">
+                                    <div class="legend-color" style="background-color: #3b82f6;"></div>
+                                    <span class="text-xs">Response/Established</span>
+        </div>
+        <div class="legend-item">
+                                    <div class="legend-color" style="background-color: #ef4444;"></div>
+                                    <span class="text-xs">Request Rejected</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        // Performance utilities
+        function throttle(callback, limit) {
+            let waiting = false;
+            return function() {
+                if (!waiting) {
+                    callback.apply(this, arguments);
+                    waiting = true;
+                    setTimeout(function() {
+                        waiting = false;
+                    }, limit);
+                }
+            };
+        }
+        
+        // D3.js force-directed graph implementation
+        const container = document.getElementById('network-container');
+        const containerRect = container.getBoundingClientRect();
+        const width = containerRect.width;
+        const height = containerRect.height;
+        
+        // Configuration constants
+        const MIN_NODE_RADIUS = 5;
+        const MAX_NODE_RADIUS = 20;
+        const MIN_LINK_WIDTH = 1;
+        const MAX_LINK_WIDTH = 5;
+        const ZOOM_EXTENT = [0.1, 8];
+        
+        // Network-specific constants for optimization
+        const FORCE_STRENGTH = -400;       // Increased from -100 for better node separation
+        const LINK_DISTANCE_FACTOR = 150;  // Increased from 100 for better spacing
+        const COLLISION_PADDING = 5;       // Additional padding for collision detection
+        
+        // Create tooltip
+        const tooltip = d3.select("body").append("div")
+            .attr("class", "tooltip")
+            .style("opacity", 0);
+        
+        // Create SVG container with zoom support
+        const svg = d3.select('#network-container')
+            .append('svg')
+            .attr('width', width)
+            .attr('height', height);
+        
+        // Add definitions for arrow markers
+        const defs = svg.append("defs");
+        
+        // Create arrow markers for different link types with more elegant styling
+        defs.append("marker")
+            .attr("id", "arrow-request-accepted")
+            .attr("viewBox", "0 -5 10 10")
+            .attr("refX", 25) /* Position arrow just outside the node */
+            .attr("refY", 0)
+            .attr("markerWidth", 5) /* Even smaller for more elegance */
+            .attr("markerHeight", 5)
+            .attr("orient", "auto")
+            .append("path")
+            .attr("d", "M0,-2.5L8,0L0,2.5") /* Thinner, more elegant arrow shape */
+            .attr("fill", "#4ade80");
+        
+        defs.append("marker")
+            .attr("id", "arrow-response")
+            .attr("viewBox", "0 -5 10 10")
+            .attr("refX", 24)
+            .attr("refY", 0)
+            .attr("markerWidth", 6)
+            .attr("markerHeight", 6)
+            .attr("orient", "auto")
+            .append("path")
+            .attr("d", "M0,-3L10,0L0,3")
+            .attr("fill", "#3b82f6");
+        
+        defs.append("marker")
+            .attr("id", "arrow-request-rejected")
+            .attr("viewBox", "0 -5 10 10")
+            .attr("refX", 24)
+            .attr("refY", 0)
+            .attr("markerWidth", 6)
+            .attr("markerHeight", 6)
+            .attr("orient", "auto")
+            .append("path")
+            .attr("d", "M0,-3L10,0L0,3")
+            .attr("fill", "#ef4444");
+        
+        defs.append("marker")
+            .attr("id", "arrow-default")
+            .attr("viewBox", "0 -5 10 10")
+            .attr("refX", 24)
+            .attr("refY", 0)
+            .attr("markerWidth", 6)
+            .attr("markerHeight", 6)
+            .attr("orient", "auto")
+            .append("path")
+            .attr("d", "M0,-3L10,0L0,3")
+            .attr("fill", "#999");
+        
+        // Add zoom behavior
+        const zoom = d3.zoom()
+            .scaleExtent(ZOOM_EXTENT)
+            .on("zoom", zoomed);
+        
+        svg.call(zoom);
+        
+        // Create a group that will be transformed by zoom
+        const g = svg.append("g");
+        
+        // Create subgroups for rendering order
+        const linkGroup = g.append("g").attr("class", "links");
+        const nodeGroup = g.append("g").attr("class", "nodes");
+        const labelGroup = g.append("g").attr("class", "labels");
+        
+        // Function to zoom the visualization
+        function zoomed(event) {
+            g.attr("transform", event.transform);
+        }
+        
+        // Function to reset the zoom
+        function resetZoom() {
+            svg.transition()
+                .duration(750)
+                .call(zoom.transform, d3.zoomIdentity);
+        }
+        
+        // Setup button for resetting zoom
+        document.getElementById('reset-zoom').addEventListener('click', resetZoom);
+        
+        // Flag for controlling label visibility
+        let labelsVisible = true;
+        
+        // Setup button for toggling labels
+        document.getElementById('toggle-labels').addEventListener('click', function() {
+            labelsVisible = !labelsVisible;
+            labelGroup.style("display", labelsVisible ? "block" : "none");
+        });
+        
+        // Flag for controlling physics simulation
+        let physicsEnabled = true;
+        let simulation;
+        
+        // Setup button for toggling physics
+        document.getElementById('toggle-physics').addEventListener('click', function() {
+            physicsEnabled = !physicsEnabled;
+            if (physicsEnabled && simulation) {
+                simulation.alpha(0.3).restart();
+            } else if (simulation) {
+                simulation.stop();
+            }
+        });
+        
+        // Setup fullscreen button
+        document.getElementById('btn-fullscreen').addEventListener('click', function() {
+            if (!document.fullscreenElement) {
+                container.requestFullscreen().catch(err => {
+                    console.error(`Error attempting to enable fullscreen: ${err.message}`);
+                });
+            } else {
+                document.exitFullscreen();
+            }
+        });
+        
+        // Load the network data
+        fetch(`/api/network_data/{{ filename }}`)
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`Network response was not ok: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                console.log("Received network data:", data);
+                processAndVisualizeData(data);
+            })
+            .catch(error => {
+                console.error("Error fetching network data:", error);
+                displayError(`Error loading data: ${error.message}`);
+            });
+        
+        // Main function to process data and create the visualization
+        function processAndVisualizeData(data) {
+            try {
+                // Initialize data structures
+                let nodes = [];
+                let links = [];
+                
+                // Process nodes
+                if (Array.isArray(data.nodes)) {
+                    nodes = data.nodes.map(node => ({
+                        id: node.id,
+                        label: node.label || formatMacAddress(node.id) || node.id,
+                        group: node.vendor || node.group || 'unknown',
+                        vendor: node.vendor || 'Unknown',
+                        ip_addresses: node.ip_addresses || node.ips || [node.ip] || [],
+                        subnet: extractSubnet(node.ip_addresses || node.ips || [node.ip]),
+                        packets: node.packets || node.packet_count || 0,
+                        bytes: node.bytes || node.byte_count || 0,
+                        bytes_sent: node.bytes_sent || node.bytes || 0, // Use bytes_sent if available, otherwise use bytes
+                        // Add any other properties if present
+                        ...node
+                    }));
+                }
+                
+                // Process links (edges)
+                if (Array.isArray(data.edges)) {
+                    links = data.edges.map(edge => ({
+                        source: edge.from || edge.source,
+                        target: edge.to || edge.target,
+                        source_ip: edge.source_ip || '',
+                        target_ip: edge.target_ip || '',
+                        source_port: edge.source_port || 0,
+                        target_port: edge.target_port || 0,
+                        protocol: edge.protocol || 'Unknown',
+                        app_protocol: edge.app_protocol || '',
+                        packets_a_to_b: edge.packets_a_to_b || 0,
+                        packets_b_to_a: edge.packets_b_to_a || 0,
+                        bytes_a_to_b: edge.bytes_a_to_b || 0,
+                        bytes_b_to_a: edge.bytes_b_to_a || 0,
+                        conversation_status: edge.conversation_status || getConnectionType(edge),
+                        tcp_flags: edge.tcp_flags || [],
+                        vlan_ids: edge.vlan_ids || [],
+                        duration: edge.duration || 0,
+                        value: calculateLinkValue(edge)
+                    }));
+                } else if (Array.isArray(data.links)) {
+                    links = data.links.map(link => ({
+                        source: link.source,
+                        target: link.target,
+                        source_ip: link.source_ip || '',
+                        target_ip: link.target_ip || '',
+                        source_port: link.source_port || 0,
+                        target_port: link.target_port || 0,
+                        protocol: link.protocol || 'Unknown',
+                        app_protocol: link.app_protocol || '',
+                        packets_a_to_b: link.packets_a_to_b || 0,
+                        packets_b_to_a: link.packets_b_to_a || 0,
+                        bytes_a_to_b: link.bytes_a_to_b || 0,
+                        bytes_b_to_a: link.bytes_b_to_a || 0,
+                        conversation_status: link.conversation_status || link.type || 'default',
+                        tcp_flags: link.tcp_flags || [],
+                        vlan_ids: link.vlan_ids || [],
+                        duration: link.duration || 0,
+                        value: calculateLinkValue(link)
+                    }));
+                }
+                
+                // Performance optimization: limit links for very large datasets
+                if (links.length > 1000) {
+                    console.warn(`Large dataset detected (${links.length} links). Limiting to 1000 for performance.`);
+                    links = links.slice(0, 1000);
+                }
+                
+                // If we have data, create the visualization
+                if (nodes.length > 0 || links.length > 0) {
+                    createNetworkVisualization(nodes, links);
+                } else {
+                    displayError("No nodes or links found in the data");
+                }
+            } catch (err) {
+                console.error("Error processing network data:", err);
+                displayError(`Error processing data: ${err.message}`);
+            }
+        }
+        
+        // Helper function to determine connection type
+        function getConnectionType(link) {
+            const status = (link.conversation_status || '').toLowerCase();
+            const title = (link.title || '').toLowerCase();
+            
+            if (status.includes('accepted') || title.includes('accepted')) return 'request-accepted';
+            if (status.includes('rejected') || title.includes('rejected') || status.includes('no-response')) return 'request-rejected';
+            if (status.includes('response') || title.includes('response')) return 'response';
+            if (status.includes('established')) return 'established';
+            
+            return 'default';
+        }
+        
+        // Helper function to calculate link value for thickness
+        function calculateLinkValue(link) {
+            const totalBytes = (link.bytes_a_to_b || 0) + (link.bytes_b_to_a || 0);
+            const totalPackets = (link.packets_a_to_b || 0) + (link.packets_b_to_a || 0);
+            
+            // If we have byte counts, use those, otherwise fall back to packets
+            return totalBytes > 0 ? totalBytes : totalPackets;
+        }
+        
+        // Helper function to format MAC address with colons for readability
+        function formatMacAddress(mac) {
+            if (!mac || typeof mac !== 'string') return mac;
+            // If already formatted with colons or dashes, return as is
+            if (mac.includes(':') || mac.includes('-')) return mac;
+            
+            // Format as XX:XX:XX:XX:XX:XX
+            return mac.match(/.{1,2}/g)?.join(':') || mac;
+        }
+        
+        // Helper function to extract subnet information for clustering
+        function extractSubnet(ipAddresses) {
+            if (!ipAddresses || !Array.isArray(ipAddresses) || ipAddresses.length === 0) 
+                return 'unknown';
+            
+            // Get first IPv4 address
+            const ipv4 = ipAddresses.find(ip => ip && !ip.includes(':'));
+            if (!ipv4) return 'unknown';
+            
+            // Extract first three octets as subnet
+            const parts = ipv4.split('.');
+            if (parts.length !== 4) return 'unknown';
+            
+            return `${parts[0]}.${parts[1]}.${parts[2]}`;
+        }
+        
+        // Main function to create the network visualization
+        function createNetworkVisualization(nodes, links) {
+            // Create maps for node lookups
+            const nodeIds = new Set(nodes.map(n => n.id));
+            const nodeMap = {};
+            
+            nodes.forEach(node => {
+                nodeMap[node.id] = node;
+            });
+            
+            // Process links to use node references instead of IDs
+            const processedLinks = links.map(link => {
+                // Ensure source and target are objects, not just ids
+                if (typeof link.source === 'string') {
+                    if (!nodeMap[link.source]) {
+                        // Create missing nodes if necessary
+                        if (!nodeIds.has(link.source)) {
+                            const newNode = { 
+                                id: link.source, 
+                                label: link.source,
+                                group: 'auto-generated'
+                            };
+                            nodes.push(newNode);
+                            nodeMap[link.source] = newNode;
+                            nodeIds.add(link.source);
+                        }
+                    }
+                    link.source = nodeMap[link.source];
+                }
+                
+                if (typeof link.target === 'string') {
+                    if (!nodeMap[link.target]) {
+                        // Create missing nodes if necessary
+                        if (!nodeIds.has(link.target)) {
+                            const newNode = { 
+                                id: link.target, 
+                                label: link.target,
+                                group: 'auto-generated'
+                            };
+                            nodes.push(newNode);
+                            nodeMap[link.target] = newNode;
+                            nodeIds.add(link.target);
+                        }
+                    }
+                    link.target = nodeMap[link.target];
+                }
+                
+                return link;
+            });
+            
+            // Organize nodes by subnets for clustering
+            const subnets = Array.from(new Set(nodes.map(n => n.subnet)));
+            console.log(`Found ${subnets.length} IP subnets for clustering`);
+            
+            // Create scales for node radius and link width
+            const nodeValueExtent = d3.extent(nodes, d => d.bytes_sent || d.bytes || 1);
+            const nodeRadiusScale = d3.scaleLog() // Using log scale for better distribution
+                .domain([Math.max(1, nodeValueExtent[0] || 1), Math.max(100, nodeValueExtent[1] || 100)])
+                .range([MIN_NODE_RADIUS, MAX_NODE_RADIUS])
+                .clamp(true);
+            
+            const linkValueExtent = d3.extent(processedLinks, d => {
+                // Calculate total bytes exchanged (A to B plus B to A)
+                return (d.bytes_a_to_b || 0) + (d.bytes_b_to_a || 0);
+            });
+            const linkWidthScale = d3.scaleLog() // Using log scale for better representation of traffic volume
+                .domain([Math.max(1, linkValueExtent[0] || 1), Math.max(100, linkValueExtent[1] || 100)])
+                .range([MIN_LINK_WIDTH, MAX_LINK_WIDTH])
+                .clamp(true);
+            
+            // Create a color scale for nodes based on vendor or group
+            const vendors = Array.from(new Set(nodes.map(n => n.vendor || n.group || 'unknown')));
+            const colorScale = d3.scaleOrdinal()
+                .domain(vendors)
+                .range(d3.schemeCategory10);
+            
+            // Initialize the simulation with optimized parameters
+            simulation = d3.forceSimulation(nodes)
+                .force("link", d3.forceLink(processedLinks)
+                    .id(d => d.id)
+                    .distance(150)
+                    .strength(0.3))
+                .force("charge", d3.forceManyBody().strength(FORCE_STRENGTH * -0.8))
+                .force("center", d3.forceCenter(width / 2, height / 2))
+                .force("collide", d3.forceCollide().radius(nodeRadiusScale.range()[1] * 1.5).strength(0.7))
+                .force("subnet", null);
+            
+            // Create links with enhanced styling
+            const link = linkGroup
+                .selectAll("path")
+                .data(processedLinks)
+                .enter()
+                .append("path")
+                .attr("class", d => `link ${d.conversation_status}`)
+                .attr("stroke-width", d => {
+                    // Even less variation in width for elegant appearance
+                    const totalBytes = (d.bytes_a_to_b || 0) + (d.bytes_b_to_a || 0);
+                    return 1.2 + Math.min(0.8, linkWidthScale(Math.max(1, totalBytes)) / 5); /* Thinner lines */
+                })
+                .attr("stroke-opacity", 0.8)
+                .attr("marker-end", d => {
+                    // Use different arrow styles based on connection type
+                    if (d.conversation_status === 'request-accepted') return "url(#arrow-request-accepted)";
+                    if (d.conversation_status === 'response' || d.conversation_status === 'established') return "url(#arrow-response)";
+                    if (d.conversation_status === 'request-rejected' || d.conversation_status === 'no-response') return "url(#arrow-request-rejected)";
+                    return "url(#arrow-default)";
+                })
+                .on("mouseover", showLinkTooltip)
+                .on("mouseout", hideTooltip)
+                .on("contextmenu", showLinkContextMenu); // Add right-click context menu for links
+            
+            // Add text labels to links - improved implementation
+            const linkText = linkGroup
+                .selectAll("text")
+                .data(processedLinks)
+                .enter()
+                .append("text")
+                .attr("class", "link-label")
+                .attr("dy", -5)
+                .append("textPath")
+                .attr("href", (d, i) => `#path-${i}`)
+                .attr("startOffset", "50%")
+                .text(d => {
+                    const status = d.conversation_status;
+                    if (status === 'request-accepted') return 'request accepted';
+                    if (status === 'request-rejected') return 'request rejected';
+                    if (status === 'response') return 'response';
+                    if (status === 'established') return 'established';
+                    return status.replace('-', ' ');
+                });
+            
+            // Detect and mark bidirectional links for curved rendering
+            const linkMap = new Map();
+            processedLinks.forEach((link, i) => {
+                // Add unique ID to each path for text labels
+                link.id = `path-${i}`;
+                
+                const key = `${link.source.id}-${link.target.id}`;
+                if (linkMap.has(key)) {
+                    // This is a duplicate link, mark it for later
+                    link.isDuplicate = true;
+                    } else {
+                    // Check if there's a reverse link
+                    const reverseKey = `${link.target.id}-${link.source.id}`;
+                    const existingLinks = linkMap.get(reverseKey) || [];
+                    
+                    if (existingLinks.length > 0) {
+                        // This is a bidirectional connection
+                        link.isBidirectional = true;
+                        
+                        // Mark all existing reverse links as bidirectional too
+                        existingLinks.forEach(idx => {
+                            processedLinks[idx].isBidirectional = true;
+                        });
+                    }
+                    
+                    // Store this link's index
+                    if (!linkMap.has(key)) {
+                        linkMap.set(key, []);
+                    }
+                    linkMap.get(key).push(i);
+                }
+            });
+            
+            // Create nodes
+            const node = nodeGroup
+                .selectAll("circle")
+                .data(nodes)
+                .enter()
+                .append("circle")
+                .attr("class", "node")
+                .attr("r", d => Math.max(8, Math.min(15, nodeRadiusScale(d.bytes_sent || d.bytes || 1)))) // More consistent size
+                .attr("fill", "#e2e2e2") // Consistent gray fill for all nodes
+                .attr("stroke", "#aaa")
+                .attr("stroke-width", 1)
+                .on("mouseout", hideTooltip)
+                .on("dblclick", showNodeTooltip)
+                .on("contextmenu", showNodeContextMenu)
+                .call(d3.drag()
+                    .on("start", dragstarted)
+                    .on("drag", dragged)
+                    .on("end", dragended));
+            
+            // Create node labels
+            const nodeLabel = labelGroup
+                .selectAll("text")
+                .data(nodes)
+                .enter()
+                .append("text")
+                .attr("class", "node-label")
+                .attr("dy", "0.35em")
+                .text(d => {
+                    const label = d.label || d.id;
+                    if (label && label.length > 15) {
+                        return label.substring(0, 12) + '...';
+                    }
+                    return label;
+                });
+            
+            // Tooltip functions
+            function showNodeTooltip(event, d) {
+                // Hide any existing tooltips
+                hideTooltip();
+                
+                // Build HTML content for tooltip
+                let html = `
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                        <h4 style="margin: 0;">${d.label}</h4>
+                        <button class="close-tooltip" style="background: none; border: none; cursor: pointer; font-size: 16px; padding: 0 5px;">×</button>
+                    </div>
+                    <table>
+                `;
+                
+                // Add MAC address
+                html += `<tr><th>MAC:</th><td>${formatMacAddress(d.id)}</td></tr>`;
+                
+                // Add vendor if available
+                if (d.vendor) {
+                    html += `<tr><th>Vendor:</th><td>${d.vendor}</td></tr>`;
+                }
+                
+                // Add IP addresses
+                if (d.ip_addresses && d.ip_addresses.length > 0) {
+                    html += `<tr><th>IP(s):</th><td>${Array.isArray(d.ip_addresses) ? d.ip_addresses.join(', ') : d.ip_addresses}</td></tr>`;
+                } else if (d.ip) {
+                    html += `<tr><th>IP:</th><td>${d.ip}</td></tr>`;
+                }
+                
+                // Add packets/bytes if available
+                if (d.packets) {
+                    html += `<tr><th>Packets:</th><td>${d.packets.toLocaleString()}</td></tr>`;
+                }
+                
+                if (d.bytes) {
+                    html += `<tr><th>Bytes:</th><td>${d.bytes.toLocaleString()}</td></tr>`;
+                }
+                
+                // Add any other properties
+                Object.keys(d).forEach(key => {
+                    if (!['id', 'label', 'group', 'vendor', 'packets', 'bytes', 'index', 'x', 'y', 'vx', 'vy', 'fx', 'fy', 'ip_addresses', 'ip'].includes(key)) {
+                        html += `<tr><th>${key}:</th><td>${d[key]}</td></tr>`;
+                    }
+                });
+                
+                html += `</table>`;
+                
+                // Show tooltip
+                const tooltipElement = tooltip.html(html)
+                    .style("left", (event.pageX + 15) + "px")
+                    .style("top", (event.pageY - 28) + "px")
+                    .style("opacity", 1)
+                    .style("pointer-events", "auto") // Enable pointer events to allow clicking the close button
+                    .style("border", "1px solid #ddd")
+                    .style("z-index", 1001); // Ensure it's above context menu
+                
+                // Add event listener to close button
+                tooltipElement.select(".close-tooltip")
+                    .on("click", () => {
+                        hideTooltip();
+                    });
+            }
+            
+            function showLinkTooltip(event, d) {
+                // Calculate total bytes and packets
+                const totalBytes = d.bytes_a_to_b + d.bytes_b_to_a;
+                const totalPackets = d.packets_a_to_b + d.packets_b_to_a;
+                
+                // Get formatted MAC addresses
+                const sourceMac = formatMacAddress(d.source.id);
+                const targetMac = formatMacAddress(d.target.id);
+                
+                // Build HTML content for tooltip
+                let html = `
+                    <h4>Network Conversation</h4>
+                    <table>
+                        <tr><th>Source MAC:</th><td>${sourceMac}</td></tr>
+                        <tr><th>Target MAC:</th><td>${targetMac}</td></tr>
+                `;
+                
+                // Add IP addresses if available
+                if (d.source_ip) {
+                    html += `<tr><th>Source IP:</th><td>${d.source_ip}</td></tr>`;
+                }
+                
+                if (d.target_ip) {
+                    html += `<tr><th>Target IP:</th><td>${d.target_ip}</td></tr>`;
+                }
+                
+                // Add ports if available
+                if (d.source_port) {
+                    html += `<tr><th>Source Port:</th><td>${d.source_port}</td></tr>`;
+                }
+                
+                if (d.target_port) {
+                    html += `<tr><th>Target Port:</th><td>${d.target_port}</td></tr>`;
+                }
+                
+                // Add protocol information
+                html += `<tr><th>Protocol:</th><td>${d.protocol}</td></tr>`;
+                
+                if (d.app_protocol) {
+                    html += `<tr><th>App Protocol:</th><td>${d.app_protocol}</td></tr>`;
+                }
+                
+                // Add connection status
+                html += `<tr><th>Status:</th><td>${d.conversation_status}</td></tr>`;
+                
+                // Add packet and byte counts
+                html += `
+                    <tr><th>A→B Packets:</th><td>${d.packets_a_to_b.toLocaleString()}</td></tr>
+                    <tr><th>B→A Packets:</th><td>${d.packets_b_to_a.toLocaleString()}</td></tr>
+                    <tr><th>Total Packets:</th><td>${totalPackets.toLocaleString()}</td></tr>
+                    <tr><th>A→B Bytes:</th><td>${d.bytes_a_to_b.toLocaleString()}</td></tr>
+                    <tr><th>B→A Bytes:</th><td>${d.bytes_b_to_a.toLocaleString()}</td></tr>
+                    <tr><th>Total Bytes:</th><td>${totalBytes.toLocaleString()}</td></tr>
+                `;
+                
+                // Add VLAN IDs if available
+                if (d.vlan_ids && d.vlan_ids.length > 0) {
+                    html += `<tr><th>VLAN IDs:</th><td>${d.vlan_ids.join(', ')}</td></tr>`;
+                }
+                
+                // Add duration if available
+                if (d.duration) {
+                    html += `<tr><th>Duration:</th><td>${d.duration.toFixed(2)} sec</td></tr>`;
+                }
+                
+                // Add TCP flags if available
+                if (d.tcp_flags && d.tcp_flags.length > 0) {
+                    html += `<tr><th>TCP Flags:</th><td>${d.tcp_flags.join(", ")}</td></tr>`;
+                }
+                
+                html += `</table>`;
+                
+                // Show tooltip
+                tooltip.html(html)
+                    .style("left", (event.pageX + 15) + "px")
+                    .style("top", (event.pageY - 28) + "px")
+                    .style("opacity", 1);
+            }
+            
+            function hideTooltip() {
+                tooltip
+                    .style("opacity", 0)
+                    .style("pointer-events", "none"); // Disable pointer events when hidden
+            }
+            
+            // Context menu for links
+            function showLinkContextMenu(event, d) {
+                // Prevent default right-click behavior
+                event.preventDefault();
+                
+                // Hide any existing context menus
+                d3.selectAll(".context-menu").remove();
+                
+                // Create context menu
+                const menu = d3.select("body")
+                    .append("div")
+                    .attr("class", "context-menu")
+                    .style("position", "absolute")
+                    .style("left", `${event.pageX}px`)
+                    .style("top", `${event.pageY}px`);
+                
+                // Add menu items
+                menu.append("div")
+                    .attr("class", "context-menu-item")
+                    .text("View Link Details")
+                    .on("click", () => {
+                        // Hide the menu
+                        d3.selectAll(".context-menu").remove();
+                        // Show link tooltip
+                        showLinkTooltip(event, d);
+                    });
+                
+                // Close context menu when clicking elsewhere
+                d3.select("body").on("click.context-menu", () => {
+                    d3.selectAll(".context-menu").remove();
+                    d3.select("body").on("click.context-menu", null);
+                });
+            }
+            
+            // Create context menu for nodes - updated title
+            function showNodeContextMenu(event, d) {
+                // Prevent default right-click behavior
+                event.preventDefault();
+                
+                // Hide any existing context menus
+                d3.selectAll(".context-menu").remove();
+                
+                // Create context menu
+                const menu = d3.select("body")
+                    .append("div")
+                    .attr("class", "context-menu");
+                
+                // Set position
+                menu.style("left", `${event.pageX}px`)
+                    .style("top", `${event.pageY}px`);
+                
+                // Add menu items with updated text
+                menu.append("div")
+                    .attr("class", "context-menu-item")
+                    .text("View Node Details") // Changed from "View Details" to "View Node Details"
+                    .on("click", () => {
+                        // Hide the menu
+                        d3.selectAll(".context-menu").remove();
+                        // Show node tooltip
+                        showNodeTooltip(event, d);
+                    });
+                
+                // Close context menu when clicking elsewhere
+                d3.select("body").on("click.context-menu", () => {
+                    d3.selectAll(".context-menu").remove();
+                    d3.select("body").on("click.context-menu", null);
+                });
+            }
+            
+            // Throttled tick function for better performance
+            const throttledTick = throttle(() => {
+                // Update link paths with curved connections for bidirectional links
+                linkGroup.selectAll("path")
+                    .attr("id", d => d.id) // Set the ID for textPath reference
+                    .attr("d", d => {
+                        const sourceX = d.source.x;
+                        const sourceY = d.source.y;
+                        const targetX = d.target.x;
+                        const targetY = d.target.y;
+                        
+                        // Calculate distance between nodes for scaling
+                        const dx = targetX - sourceX;
+                        const dy = targetY - sourceY;
+                        const distance = Math.sqrt(dx * dx + dy * dy);
+                        
+                        if (d.isBidirectional) {
+                            // Calculate midpoint
+                            const midX = (sourceX + targetX) / 2;
+                            const midY = (sourceY + targetY) / 2;
+                            
+                            // Calculate normal vector for curve control point
+                            const norm = Math.sqrt(dx * dx + dy * dy);
+                            
+                            // Use normalized perpendicular vector for control point
+                            // Make curves more subtle for elegant appearance
+                            const curveStrength = Math.min(distance / 6, 20); /* Reduce curve strength for subtlety */
+                            
+                            // Create different curves for each direction
+                            if (d.source.id < d.target.id) {
+                                // Curve one way
+                                return `M${sourceX},${sourceY} Q${midX - dy/norm * curveStrength},${midY + dx/norm * curveStrength} ${targetX},${targetY}`;
+                            } else {
+                                // Curve the other way
+                                return `M${sourceX},${sourceY} Q${midX + dy/norm * curveStrength},${midY - dx/norm * curveStrength} ${targetX},${targetY}`;
+                            }
+                        } else {
+                            // Straight line for single direction
+                            return `M${sourceX},${sourceY} L${targetX},${targetY}`;
+                        }
+                    });
+                
+                // Update node positions
+                node
+                    .attr("cx", d => d.x)
+                    .attr("cy", d => d.y);
+                
+                // Update node labels
+                nodeLabel
+                    .attr("x", d => d.x)
+                    .attr("y", d => d.y);
+            }, 16); // 60fps
+            
+            // Simulation tick event
+            simulation.on("tick", () => {
+                // Skip visual updates during high activity phases
+                if (simulation.alpha() < 0.3) {
+                    throttledTick();
+                }
+            });
+            
+            // Auto-stabilize for large networks
+            if (nodes.length > 100) {
+                simulation.alphaDecay(0.02); // Faster cooling
+                
+                // Stop the simulation after a while to save CPU
+                setTimeout(() => {
+                    if (physicsEnabled) {
+                        simulation.stop();
+                        physicsEnabled = false;
+                        console.log("Simulation auto-stopped to improve performance");
+                    }
+                }, 5000);
+            }
+            
+            // Drag functions
+            function dragstarted(event, d) {
+                if (!event.active) simulation.alphaTarget(0.3).restart();
+                d.fx = d.x;
+                d.fy = d.y;
+            }
+            
+            function dragged(event, d) {
+                d.fx = event.x;
+                d.fy = event.y;
+                throttledTick(); // Update immediately during drag
+            }
+            
+            function dragended(event, d) {
+                if (!event.active) simulation.alphaTarget(0);
+                if (!event.ctrlKey) { // Keep fixed if ctrl is pressed
+                    d.fx = null;
+                    d.fy = null;
+                }
+            }
+            
+            // Setup layout buttons - make sure to pass vendors, colorScale, and all other needed variables
+            setupLayoutButtons(simulation, nodes, vendors, colorScale, processedLinks, linkValueExtent, nodeRadiusScale, subnets);
+            
+            // Setup search functionality
+            setupSearch(nodes, node, nodeLabel, simulation);
+            
+            // Update the legend with actual data
+            updateLegend(vendors, colorScale);
+        }
+        
+        // Function to set up search functionality
+        function setupSearch(nodes, nodeElements, labelElements, simulation) {
+            const searchInput = document.getElementById('search-input');
+            const searchButton = document.getElementById('search-button');
+            
+            function performSearch() {
+                const searchTerm = searchInput.value.toLowerCase().trim();
+                if (!searchTerm) return;
+                
+                // Find matching nodes
+                const matches = nodes.filter(node => 
+                    (node.label && node.label.toLowerCase().includes(searchTerm)) ||
+                    (node.id && node.id.toString().toLowerCase().includes(searchTerm))
+                );
+                
+                if (matches.length > 0) {
+                    // Highlight matched nodes and focus on first match
+                    nodeElements
+                        .attr("stroke-width", d => matches.some(n => n.id === d.id) ? 3 : 1.5)
+                        .attr("stroke", d => matches.some(n => n.id === d.id) ? "#ff0" : "#fff");
+                    
+                    // Focus view on the first match
+                    const match = matches[0];
+                    
+                    // Zoom to the node
+                    const scale = 2;
+                    const transform = d3.zoomIdentity
+                        .translate(width/2, height/2)
+                        .scale(scale)
+                        .translate(-match.x, -match.y);
+                    
+                    svg.transition().duration(750).call(zoom.transform, transform);
+                    
+                    // Reset highlight after a delay
+                    setTimeout(() => {
+                        nodeElements
+                            .attr("stroke-width", 1.5)
+                            .attr("stroke", "#fff");
+                    }, 3000);
+                    
+                    // Show count
+                    console.log(`Found ${matches.length} matches for "${searchTerm}"`);
+                } else {
+                    alert(`No nodes found matching "${searchTerm}"`);
+                }
+            }
+            
+            // Setup event listeners
+            if (searchButton) {
+                searchButton.addEventListener('click', performSearch);
+            }
+            
+            if (searchInput) {
+                searchInput.addEventListener('keyup', e => {
+                    if (e.key === "Enter") {
+                        performSearch();
+                    }
+                });
+            }
+        }
+        
+        // Function to set up layout buttons
+        function setupLayoutButtons(simulation, nodes, vendors, colorScale, processedLinks, linkValueExtent, nodeRadiusScale, subnets) {
+            const forceBtn = document.getElementById('layout-force');
+            const radialBtn = document.getElementById('layout-radial');
+            const groupBtn = document.getElementById('layout-group');
+            const subnetBtn = document.getElementById('layout-subnet');
+            
+            // Default force-directed layout - optimized for conversations
+            if (forceBtn) {
+                forceBtn.addEventListener('click', () => {
+                    updateButtonStyles(forceBtn);
+                    
+                    // Adjust force parameters to emphasize conversations (links)
+                    simulation
+                        .force("link", d3.forceLink(processedLinks)
+                            .id(d => d.id)
+                            .strength(0.4) // Reduced for more elegant layout
+                            .distance(LINK_DISTANCE_FACTOR * 1.5))
+                        .force("x", null)
+                        .force("y", null)
+                        .force("charge", d3.forceManyBody().strength(FORCE_STRENGTH * 1.2).distanceMax(1000))
+                        .force("center", d3.forceCenter(width / 2, height / 2))
+                        .force("subnet", null)
+                        .alpha(0.3)
+                        .restart();
+                });
+            }
+            
+            // Radial layout - optimized for endpoints
+            if (radialBtn) {
+                radialBtn.addEventListener('click', () => {
+                    updateButtonStyles(radialBtn);
+                    
+                    // Compute radius based on node count
+                    const radius = Math.min(width, height) * 0.4;
+                    
+                    // Create rings based on node types or roles
+                    simulation
+                        .force("link", d3.forceLink(processedLinks)
+                            .id(d => d.id)
+                            .strength(0.3)) // Weaker link force
+                        .force("x", d3.forceX(width / 2).strength(0.1))
+                        .force("y", d3.forceY(height / 2).strength(0.1))
+                        .force("charge", d3.forceManyBody().strength(-50).distanceMax(500))
+                        .force("r", d3.forceRadial(d => {
+                            // Place nodes at different rings based on their role or type
+                            if (d.subnet && d.subnet.startsWith('192.168')) return radius * 0.6;
+                            if (d.subnet && d.subnet.startsWith('10.')) return radius * 0.8;
+                            return radius;
+                        }, width / 2, height / 2).strength(0.8))
+                        .force("center", null)
+                        .force("subnet", null)
+                        .alpha(0.3)
+                        .restart();
+                });
+            }
+            
+            // Group layout - by vendor/group
+            if (groupBtn) {
+                groupBtn.addEventListener('click', () => {
+                    updateButtonStyles(groupBtn);
+                    
+                    // Get unique groups and create positions
+                    const groups = Array.from(new Set(nodes.map(n => n.vendor || n.group || 'unknown')));
+                    const angleStep = (2 * Math.PI) / groups.length;
+                    const radius = Math.min(width, height) * 0.4;
+                    const groupPositions = {};
+                    
+                    groups.forEach((group, i) => {
+                        const angle = i * angleStep;
+                        groupPositions[group] = {
+                            x: width/2 + radius * Math.cos(angle),
+                            y: height/2 + radius * Math.sin(angle)
+                        };
+                    });
+                    
+                    simulation
+                        .force("link", d3.forceLink(processedLinks)
+                            .id(d => d.id)
+                            .strength(0.3)) // Weaker link force for hierarchical layout
+                        .force("x", d3.forceX(d => groupPositions[d.vendor || d.group || 'default'].x).strength(0.5))
+                        .force("y", d3.forceY(d => groupPositions[d.vendor || d.group || 'default'].y).strength(0.5))
+                        .force("charge", d3.forceManyBody().strength(-50).distanceMax(500))
+                        .force("center", null)
+                        .force("r", null)
+                        .force("subnet", null)
+                        .alpha(0.3)
+                        .restart();
+                });
+            }
+            
+            // Subnet layout - by network structure
+            if (subnetBtn) {
+                subnetBtn.addEventListener('click', () => {
+                    updateButtonStyles(subnetBtn);
+                    
+                    // Apply subnet-based clustering
+                    simulation
+                        .force("link", d3.forceLink(processedLinks)
+                            .id(d => d.id)
+                            .strength(0.3)) // Weaker link force for hierarchical layout
+                        .force("x", null)
+                        .force("y", null)
+                        .force("charge", d3.forceManyBody().strength(FORCE_STRENGTH * 0.8).distanceMax(500))
+                        .force("center", d3.forceCenter(width / 2, height / 2))
+                        .force("r", null)
+                        .force("subnet", createClusterForce(nodes, subnets, width, height, 0.3))
+                        .alpha(0.3)
+                        .restart();
+                });
+            }
+            
+            // Helper to update button styles
+            function updateButtonStyles(activeButton) {
+                // Reset all buttons
+                [forceBtn, radialBtn, groupBtn, subnetBtn].forEach(btn => {
+                    if (btn) {
+                        btn.classList.remove('btn-primary');
+                        btn.classList.add('btn-secondary');
+                    }
+                });
+                
+                // Set active button
+                activeButton.classList.remove('btn-secondary');
+                activeButton.classList.add('btn-primary');
+                
+                // Ensure physics is enabled
+                physicsEnabled = true;
+            }
+            
+            // Update the legend with actual data
+            updateLegend(vendors, colorScale);
+        }
+        
+        // Function to display error messages
+        function displayError(message) {
+            container.innerHTML = `
+                <div class="flex flex-col items-center justify-center h-full p-8">
+                    <div class="text-red-500 text-2xl mb-4">
+                        <i class="fas fa-exclamation-triangle mr-2"></i>Error
+                    </div>
+                    <div class="text-gray-700 text-center max-w-md">${message}</div>
+                </div>
+            `;
+        }
+        
+        // Update the legend with actual vendor/group data
+        function updateLegend(vendors, colorScale) {
+            const legendSection = d3.select(".legend");
+            
+            // Clear existing legend
+            legendSection.html("");
+            
+            // Section title - Connection Types
+            legendSection.append("div")
+                .attr("class", "w-full text-xs font-semibold mb-1 mt-2")
+                .text("Connection Types:");
+            
+            // Connection type legend items
+            const connectionTypes = [
+                { type: 'request-accepted', label: 'Request Accepted', color: '#4ade80' },
+                { type: 'established', label: 'Established', color: '#3b82f6' },
+                { type: 'request-rejected', label: 'Rejected', color: '#ef4444' }
+            ];
+            
+            connectionTypes.forEach(conn => {
+                const item = legendSection.append("div")
+                    .attr("class", "legend-item");
+                
+                item.append("div")
+                    .attr("class", "legend-color")
+                    .style("background-color", conn.color)
+                    .style("height", "2px")
+                    .style("width", "15px");
+                
+                item.append("span")
+                    .attr("class", "text-xs")
+                    .text(conn.label);
+            });
+            
+            // Add vendor/group section if we have multiple vendors
+            if (vendors.length > 1) {
+                // Add vendor/group section title
+                legendSection.append("div")
+                    .attr("class", "w-full text-xs font-semibold mb-1 mt-3")
+                    .text("Device Vendors:");
+                
+                // Only show the top 6 vendors to avoid overcrowding
+                const topVendors = vendors.slice(0, Math.min(6, vendors.length));
+                
+                // Create vendor legend items
+                topVendors.forEach(vendor => {
+                    const item = legendSection.append("div")
+                        .attr("class", "legend-item");
+                    
+                    item.append("div")
+                        .attr("class", "legend-color")
+                        .style("background-color", colorScale(vendor))
+                        .style("border-radius", "50%")
+                        .style("height", "8px")
+                        .style("width", "8px");
+                    
+                    item.append("span")
+                        .attr("class", "text-xs")
+                        .text(vendor.length > 15 ? vendor.substring(0, 12) + '...' : vendor);
+                });
+                
+                // Add a note if there are more vendors
+                if (vendors.length > 6) {
+                    legendSection.append("div")
+                        .attr("class", "text-xs italic mt-1")
+                        .text(`+${vendors.length - 6} more vendors`);
+                }
+            }
+            
+            // Add new section for node/link sizing
+            legendSection.append("div")
+                .attr("class", "w-full text-xs font-semibold mb-1 mt-3")
+                .text("Sizing Information:");
+            
+            const sizingInfo = [
+                { label: 'Node Size = Bytes Sent', icon: '⚪' },
+                { label: 'Link Width = Bytes Exchanged', icon: '―' }
+            ];
+            
+            sizingInfo.forEach(info => {
+                const item = legendSection.append("div")
+                    .attr("class", "legend-item");
+                
+                item.append("span")
+                    .attr("class", "text-xs mr-1")
+                    .style("font-size", "10px")
+                    .text(info.icon);
+                
+                item.append("span")
+                    .attr("class", "text-xs")
+                    .text(info.label);
+            });
+        }
+        
+        // Define a custom clustering force based on subnets (kept for the subnet layout option)
+        function createClusterForce(nodes, subnets, width, height, strength = 0.15) {
+            const centers = createSubnetCenters(subnets, width, height);
+            
+            // Return a custom force function
+            return function(alpha) {
+                // Apply clustering force
+                for (let i = 0; i < nodes.length; ++i) {
+                    const node = nodes[i];
+                    const subnet = node.subnet || 'unknown';
+                    const center = centers.find(c => c.subnet === subnet);
+                    
+                    if (center) {
+                        node.vx += (center.x - node.x) * strength * alpha;
+                        node.vy += (center.y - node.y) * strength * alpha;
+                    }
+                }
+            };
+        }
+        
+        // Function to create subnet center positions
+        function createSubnetCenters(subnets, width, height) {
+            const numSubnets = subnets.length;
+            const centers = [];
+            
+            // Create a grid or circle of positions
+            if (numSubnets <= 4) {
+                // For few subnets, place them in corners
+                const radius = Math.min(width, height) * 0.4;
+                subnets.forEach((subnet, i) => {
+                    const angle = (2 * Math.PI * i) / numSubnets;
+                    centers.push({
+                        subnet: subnet,
+                        x: width/2 + radius * Math.cos(angle),
+                        y: height/2 + radius * Math.sin(angle)
+                    });
+                });
+            } else {
+                // For more subnets, create a grid layout
+                const cols = Math.ceil(Math.sqrt(numSubnets));
+                const rows = Math.ceil(numSubnets / cols);
+                const cellWidth = width / (cols + 1);
+                const cellHeight = height / (rows + 1);
+                
+                subnets.forEach((subnet, i) => {
+                    const col = i % cols;
+                    const row = Math.floor(i / cols);
+                    centers.push({
+                        subnet: subnet,
+                        x: cellWidth * (col + 1),
+                        y: cellHeight * (row + 1)
+                    });
+                });
+            }
+            
+            return centers;
+        }
+    });
+</script>
+{% endblock %} 
