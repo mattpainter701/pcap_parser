@@ -40,6 +40,12 @@ from pcap_regression import (
     validate_network_json,
 )
 
+from pcap_analysis import (
+    run_advanced_analysis,
+    write_analysis_json,
+    SliceCriteria,
+)
+
 OUI_FILE = "oui.txt"
 OUI_CSV_FILE = "oui.csv"
 OUTPUT_DIR = "outputs"
@@ -1250,7 +1256,7 @@ def _process_capture_file(
         benchmark_path = write_benchmark_report(benchmark_report, benchmark_output)
         print(render_benchmark_report(benchmark_report))
         print(f"\n[+] Benchmark report written: {benchmark_path}")
-        return True
+        return True, None
 
     start_time = time.time()
     result = extract_device_info(str(capture_file), debug=args.debug, bpf_filter=args.filter)
@@ -1258,7 +1264,7 @@ def _process_capture_file(
 
     if not result:
         print("\n[-] No data extracted from PCAP file.")
-        return False
+        return False, None
 
     device_info, conversation_data = result
 
@@ -1268,7 +1274,7 @@ def _process_capture_file(
         print(f"[+] Processing time: {elapsed_time:.2f} seconds")
     else:
         print("\n[-] No devices found.")
-        return False
+        return False, None
 
     # --stats-only: print summary and return without writing output files
     if args.stats_only:
@@ -1292,7 +1298,7 @@ def _process_capture_file(
             for label, count in stats['top_conversations']:
                 print(f"    {label}  {count}")
         print("=" * 56)
-        return True
+        return True, (device_info, conversation_data, elapsed_time, capture_file)
 
     device_csv = f"{output_base}-device_info.csv"
     conversation_csv = f"{output_base}-conversation_info.csv"
@@ -1322,7 +1328,7 @@ def _process_capture_file(
 
         print("\n[+] Output validation passed")
 
-    return True
+    return True, (device_info, conversation_data, elapsed_time, capture_file)
 
 
 def _run_compare_mode(
@@ -1421,6 +1427,146 @@ def _run_compare_mode(
     print(f"\n{'=' * 60}")
 
 
+def _run_post_analysis(
+    capture_file: str | Path,
+    output_base: str,
+    *,
+    args: argparse.Namespace,
+    output_dir: Path,
+    parsed_data: tuple | None = None,
+) -> None:
+    """Run Sprint 10 advanced analysis features on parsed capture data."""
+    any_analysis = (
+        args.analyze
+        or args.summary
+        or args.roles
+        or args.anomalies
+        or args.timeline
+    )
+    if not any_analysis and not args.analysis_json:
+        return
+
+    if not parsed_data:
+        print("\n[-] No parsed data available for analysis.")
+        return
+
+    device_info, conversation_data, elapsed_time, cap_file = parsed_data
+    if not device_info:
+        print("\n[-] No device data to analyze.")
+        return
+
+    print(f"\n{'=' * 68}")
+    print("  ADVANCED ANALYSIS")
+    print(f"{'=' * 68}")
+
+    # Build slice criteria from CLI flags
+    slice_criteria = None
+    if any(
+        getattr(args, f, None) is not None
+        for f in ["slice_start", "slice_end", "slice_src", "slice_dst",
+                  "slice_proto", "slice_port"]
+    ):
+        slice_criteria = SliceCriteria(
+            start_time=args.slice_start,
+            end_time=args.slice_end,
+            src_ip=args.slice_src,
+            dst_ip=args.slice_dst,
+            protocol=args.slice_proto,
+            port=args.slice_port,
+        )
+
+    # Run analysis
+    results = run_advanced_analysis(
+        str(capture_file),
+        device_info,
+        conversation_data,
+        elapsed_seconds=elapsed_time,
+        bucket_seconds=args.analysis_bucket,
+        run_roles=args.analyze or args.roles,
+        run_segments=args.analyze or args.summary,
+        run_topology=args.analyze,
+        run_anomalies=args.analyze or args.anomalies,
+        run_timeline=args.analyze or args.timeline,
+        run_summary=args.analyze or args.summary,
+        run_geoip=bool(args.geoip_db or args.geoip_locations),
+        geoip_db=args.geoip_db,
+        geoip_locations=args.geoip_locations,
+        slice_criteria=slice_criteria,
+    )
+
+    # Print results based on flags
+    if args.summary or args.analyze:
+        if "summary" in results:
+            print(results["summary"])
+
+    if args.roles or args.analyze:
+        if "roles" in results:
+            _print_roles(results["roles"])
+
+    if args.anomalies or args.analyze:
+        if "anomalies" in results:
+            _print_anomalies(results["anomalies"])
+
+    if args.timeline or args.analyze:
+        if "timeline" in results:
+            _print_timeline(results["timeline"])
+
+    # Write analysis JSON if requested
+    analysis_output = args.analysis_json
+    if args.analyze and not analysis_output:
+        analysis_output = f"{output_base}-analysis.json"
+    if analysis_output:
+        output_path = _resolve_output_path(analysis_output, output_dir) if not Path(analysis_output).is_absolute() else Path(analysis_output)
+        written = write_analysis_json(results, output_path)
+        print(f"\n[+] Analysis report written: {written}")
+
+
+def _print_roles(roles: dict) -> None:
+    """Print device role inference results."""
+    print(f"\n{'─' * 68}")
+    print("  DEVICE ROLE INFERENCE")
+    print(f"{'─' * 68}")
+    for mac, r in sorted(roles.items()):
+        role = r.get("role", "unknown")
+        conf = r.get("confidence", 0)
+        vendor = r.get("vendor", "Unknown")
+        bar = "█" * int(conf * 10)
+        print(f"  {mac:20s}  {role:12s}  {conf:.2f} {bar}  {vendor}")
+
+
+def _print_anomalies(anomalies: list) -> None:
+    """Print detected anomalies."""
+    if not anomalies:
+        print("\n  [✓] No anomalies detected.")
+        return
+    print(f"\n{'─' * 68}")
+    print(f"  ANOMALIES DETECTED ({len(anomalies)})")
+    print(f"{'─' * 68}")
+    for i, a in enumerate(anomalies, 1):
+        sev = a.get("severity", "unknown").upper()
+        atype = a.get("type", "unknown")
+        desc = a.get("description", "")
+        print(f"  {i:2d}. [{sev:6s}] {atype:20s}  {desc}")
+
+
+def _print_timeline(timeline: list) -> None:
+    """Print conversation activity timeline."""
+    if not timeline:
+        return
+    print(f"\n{'─' * 68}")
+    print("  CONVERSATION TIMELINE")
+    print(f"{'─' * 68}")
+    max_pkts = max(b.get("packets", 1) for b in timeline) if timeline else 1
+    max_width = 30
+    for bucket in timeline[:50]:  # Show first 50 buckets
+        label = bucket.get("label", "")
+        pkts = bucket.get("packets", 0)
+        active = bucket.get("conversations_active", 0)
+        width = int(pkts / max(max_pkts, 1) * max_width)
+        bar = "▓" * width + "░" * (max_width - width)
+        print(f"  {label}  {bar}  {pkts:>6d} pkts  {active:>4d} convs")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="PCAP Network Capture Analyzer — extract device inventories, "
@@ -1478,6 +1624,37 @@ See SPEC.md for the full sprint roadmap.
                         help="Wireshark/tshark display filter expression (e.g. 'tcp.port==443', 'ip.addr==10.0.0.0/8')")
     parser.add_argument("--compare", action="store_true",
                         help="Diff two captures: pcap_parser.py before.pcap after.pcap --compare")
+    # ----- Sprint 10: Advanced Analysis -----
+    parser.add_argument("--analyze", action="store_true",
+                        help="Run advanced analysis: roles, segments, topology, anomalies, timeline, summary")
+    parser.add_argument("--summary", action="store_true",
+                        help="Print executive summary report after parsing")
+    parser.add_argument("--roles", action="store_true",
+                        help="Print inferred device roles (router, server, workstation, IoT, etc.)")
+    parser.add_argument("--anomalies", action="store_true",
+                        help="Detect and print traffic anomalies (suspicious ports, asymmetry, etc.)")
+    parser.add_argument("--timeline", action="store_true",
+                        help="Print conversation activity timeline")
+    parser.add_argument("--analysis-json",
+                        help="Write full analysis results to JSON file (default: outputs/<base>-analysis.json)")
+    parser.add_argument("--geoip-db",
+                        help="Path to MaxMind GeoLite2-City.mmdb database for GeoIP enrichment")
+    parser.add_argument("--geoip-locations",
+                        help="Path to MaxMind GeoLite2-City-Locations-en.csv for CSV-based enrichment")
+    parser.add_argument("--analysis-bucket", type=float, default=60.0,
+                        help="Timeline bucket size in seconds (default: 60)")
+    parser.add_argument("--slice-start", type=float,
+                        help="Slice: start time (unix timestamp)")
+    parser.add_argument("--slice-end", type=float,
+                        help="Slice: end time (unix timestamp)")
+    parser.add_argument("--slice-src",
+                        help="Slice: source IP filter")
+    parser.add_argument("--slice-dst",
+                        help="Slice: destination IP filter")
+    parser.add_argument("--slice-proto",
+                        help="Slice: protocol filter (TCP, UDP)")
+    parser.add_argument("--slice-port", type=int,
+                        help="Slice: port filter")
     args = parser.parse_args()
 
     if args.download_instructions:
@@ -1539,10 +1716,14 @@ See SPEC.md for the full sprint roadmap.
         if not input_path.is_dir() and args.output:
             base_output = args.output
 
-        if not _process_capture_file(capture_file, args=args, output_dir=output_dir, output_base=base_output):
+        success, parsed_data = _process_capture_file(capture_file, args=args, output_dir=output_dir, output_base=base_output)
+        if not success:
             if input_path.is_dir():
                 continue
             return
+
+        # Run Sprint 10 advanced analysis if requested
+        _run_post_analysis(capture_file, base_output, args=args, output_dir=output_dir, parsed_data=parsed_data)
 
 
 if __name__ == "__main__":
