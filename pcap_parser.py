@@ -151,6 +151,122 @@ class ConversationSummary:
     def get(self, key: str, default: Any = None) -> Any:
         return getattr(self, key, default)
 
+
+SERVICE_PORT_MAP: dict[int, tuple[str, float]] = {
+    22: ("SSH", 0.98),
+    25: ("SMTP", 0.95),
+    53: ("DNS", 0.98),
+    80: ("HTTP", 0.95),
+    110: ("POP3", 0.95),
+    123: ("NTP", 0.96),
+    143: ("IMAP", 0.95),
+    161: ("SNMP", 0.94),
+    389: ("LDAP", 0.93),
+    443: ("HTTPS", 0.98),
+    445: ("SMB", 0.97),
+    587: ("SMTP", 0.92),
+    993: ("IMAPS", 0.96),
+    995: ("POP3S", 0.96),
+    3306: ("MySQL", 0.95),
+    3389: ("RDP", 0.96),
+    5432: ("PostgreSQL", 0.95),
+    5060: ("SIP", 0.90),
+    6379: ("Redis", 0.92),
+    8080: ("HTTP", 0.85),
+    8443: ("HTTPS", 0.90),
+    27017: ("MongoDB", 0.92),
+}
+
+APP_PROTOCOL_SERVICE_MAP: dict[str, str] = {
+    "DNS": "DNS",
+    "FTP": "FTP",
+    "HTTP": "HTTP",
+    "HTTP2": "HTTP",
+    "HTTPS": "HTTPS",
+    "IMAP": "IMAP",
+    "IMAPS": "IMAPS",
+    "LDAP": "LDAP",
+    "MQTT": "MQTT",
+    "MYSQL": "MySQL",
+    "NTP": "NTP",
+    "POP3": "POP3",
+    "POP3S": "POP3S",
+    "POSTGRESQL": "PostgreSQL",
+    "RDP": "RDP",
+    "REDIS": "Redis",
+    "SIP": "SIP",
+    "SMB": "SMB",
+    "SMTP": "SMTP",
+    "SSH": "SSH",
+    "TLS": "HTTPS",
+    "SSL": "HTTPS",
+}
+
+
+def _normalize_protocol_name(value: str | None) -> str | None:
+    if not value:
+        return None
+    normalized = re.sub(r"[^A-Z0-9]+", "", value.upper())
+    return normalized or None
+
+
+def infer_service_name(
+    *,
+    source_tcp_port: int | None = None,
+    target_tcp_port: int | None = None,
+    source_udp_port: int | None = None,
+    target_udp_port: int | None = None,
+    app_protocol: str | None = None,
+    protocol: str | None = None,
+) -> tuple[str | None, float]:
+    """Infer a likely service label and confidence score from ports and protocol hints."""
+
+    app_name = _normalize_protocol_name(app_protocol)
+    transport_name = _normalize_protocol_name(protocol)
+    candidate_scores: dict[str, float] = {}
+
+    if app_name:
+        mapped_service = APP_PROTOCOL_SERVICE_MAP.get(app_name)
+        if mapped_service:
+            candidate_scores[mapped_service] = max(candidate_scores.get(mapped_service, 0.0), 0.70)
+
+    for port in (source_tcp_port, target_tcp_port, source_udp_port, target_udp_port):
+        if port is None:
+            continue
+
+        service = SERVICE_PORT_MAP.get(int(port))
+        if not service:
+            continue
+
+        service_name, base_confidence = service
+        confidence = base_confidence
+        if app_name and APP_PROTOCOL_SERVICE_MAP.get(app_name) == service_name:
+            confidence = max(confidence, 0.98)
+        elif transport_name and transport_name in {"TCP", "UDP"}:
+            confidence = max(confidence, 0.80)
+
+        candidate_scores[service_name] = max(candidate_scores.get(service_name, 0.0), confidence)
+
+    if not candidate_scores:
+        return (app_protocol, 0.0) if app_protocol else (None, 0.0)
+
+    service_name, confidence = max(candidate_scores.items(), key=lambda item: item[1])
+    return service_name, confidence
+
+
+def _select_display_app_protocol(conv: ConversationSummary) -> str | None:
+    service_name, confidence = infer_service_name(
+        source_tcp_port=conv.get("source_tcp_port"),
+        target_tcp_port=conv.get("target_tcp_port"),
+        source_udp_port=conv.get("source_udp_port"),
+        target_udp_port=conv.get("target_udp_port"),
+        app_protocol=conv.get("app_protocol"),
+        protocol=conv.get("protocol"),
+    )
+    if service_name and confidence >= 0.75:
+        return service_name
+    return conv.get("app_protocol")
+
 def parse_oui_file():
     """
     Parses the IEEE OUI database from a local file.
@@ -841,7 +957,7 @@ def write_conversation_report(conversation_data, output_csv, output_dir: str | P
                     conv['target_tcp_port'],
                     conv['target_udp_port'],
                     conv['protocol'],
-                    conv['app_protocol'],
+                    _select_display_app_protocol(conv),
                     conv['packets_a_to_b'],
                     conv['packets_b_to_a'],
                     conv['bytes_a_to_b'],
@@ -919,7 +1035,7 @@ def write_json_report(device_info, conversation_data, pcap_file, output_json, ou
                 "source_ip": conv['source_ip'],
                 "target_ip": conv['target_ip'],
                 "protocol": conv['protocol'],
-                "app_protocol": conv['app_protocol'],
+                "app_protocol": _select_display_app_protocol(conv),
                 "source_tcp_port": conv['source_tcp_port'],
                 "target_tcp_port": conv['target_tcp_port'],
                 "source_udp_port": conv['source_udp_port'],

@@ -88,3 +88,47 @@ def test_output_writers_accept_slot_backed_records(tmp_path: Path, monkeypatch: 
 
     assert "MAC Address,Vendor,IP Address,TCP Ports,UDP Ports,First Seen,Last Seen,Packet Count" in device_csv
     assert "Source IP,Source MAC,Source TCP Port,Source UDP Port,Target IP,Target MAC" in conversation_csv
+
+
+def test_service_inference_uses_well_known_ports_and_scores_confidence() -> None:
+    service, confidence = pcap_parser.infer_service_name(
+        source_tcp_port=443,
+        target_tcp_port=51515,
+        app_protocol="TLS",
+        protocol="TCP",
+    )
+
+    assert service == "HTTPS"
+    assert confidence >= 0.95
+
+    dns_service, dns_confidence = pcap_parser.infer_service_name(
+        source_udp_port=53000,
+        target_udp_port=53,
+        app_protocol="DNS",
+        protocol="UDP",
+    )
+
+    assert dns_service == "DNS"
+    assert dns_confidence >= 0.95
+
+
+def test_conversation_writer_enriches_service_label(tmp_path: Path, monkeypatch: object) -> None:
+    monkeypatch.setattr(pcap_parser, "OUTPUT_DIR", str(tmp_path))
+
+    conversation_data = defaultdict(pcap_parser.ConversationSummary)
+    conv = conversation_data[("10.0.0.1", "10.0.0.2", 443, 51515, "TCP")]
+    conv.source_ip = "10.0.0.1"
+    conv.source_mac = "aa:bb:cc:dd:ee:ff"
+    conv.target_ip = "10.0.0.2"
+    conv.target_mac = "11:22:33:44:55:66"
+    conv.protocol = "TCP"
+    conv.app_protocol = "TLS"
+    conv.source_tcp_port = 443
+    conv.target_tcp_port = 51515
+    conv.first_seen = 10.0
+    conv.last_seen = 12.0
+
+    assert pcap_parser.write_conversation_report(conversation_data, "conversation.csv") is True
+
+    row = (tmp_path / "conversation.csv").read_text(encoding="utf-8").splitlines()[1]
+    assert ",HTTPS," in row
