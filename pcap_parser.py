@@ -32,6 +32,12 @@ def _resolve_output_path(output_name: str | Path, output_dir: str | Path | None 
     return base_dir / output_name
 
 
+def _expand_user_path(path: str | Path | None) -> Path | None:
+    if path is None:
+        return None
+    return Path(path).expanduser()
+
+
 def _mac_to_oui(mac: str | None) -> str | None:
     """Normalize a MAC address to the OUI key format used by the IEEE DB."""
     if not mac:
@@ -663,7 +669,7 @@ def render_benchmark_report(report: BenchmarkReport) -> str:
 
 
 def write_benchmark_report(report: BenchmarkReport, path: str | Path) -> Path:
-    output_path = Path(path)
+    output_path = Path(path).expanduser()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(report.to_dict(), indent=2) + "\n", encoding="utf-8")
     return output_path
@@ -984,11 +990,15 @@ def main():
     # Generate output filenames
     base = os.path.splitext(os.path.basename(args.pcap_file))[0]
     base_output = args.output if args.output else base
-    output_dir = Path(args.output_dir)
+    output_dir = _expand_user_path(args.output_dir) or Path(OUTPUT_DIR)
 
     if args.benchmark:
         benchmark_report = collect_benchmark_report(args.pcap_file, debug=args.debug)
-        benchmark_output = args.benchmark_output or _resolve_output_path(f"{base_output}-benchmark.json", output_dir)
+        benchmark_output = (
+            _expand_user_path(args.benchmark_output)
+            if args.benchmark_output
+            else _resolve_output_path(f"{base_output}-benchmark.json", output_dir)
+        )
         benchmark_path = write_benchmark_report(benchmark_report, benchmark_output)
         print(render_benchmark_report(benchmark_report))
         print(f"\n[+] Benchmark report written: {benchmark_path}")
