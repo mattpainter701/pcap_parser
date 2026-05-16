@@ -1,0 +1,84 @@
+{
+  "pcap_file": "/home/varta/kanban_work/t_74fe34de/pcaps/misc_cap.pcapng",
+  "wall_time_seconds": 4.683983077004086,
+  "cpu_time_seconds": 4.301800676,
+  "peak_memory_bytes": 1477860,
+  "packet_count": 1617,
+  "processed_packets": 1496,
+  "device_count": 8,
+  "conversation_count": 99,
+  "packets_per_second": 319.3862948277033,
+  "cpu_utilization_percent": 91.84065367613297,
+  "top_functions": [
+    {
+      "function": "pcap_parser.py:446:extract_device_info",
+      "primitive_calls": 1,
+      "total_calls": 1,
+      "total_time_seconds": 0.501433633,
+      "cumulative_time_seconds": 4.683787166
+    },
+    {
+      "function": "capture.py:203:_packets_from_tshark_sync",
+      "primitive_calls": 1618,
+      "total_calls": 1618,
+      "total_time_seconds": 0.020896236000000002,
+      "cumulative_time_seconds": 2.5726018550000003
+    },
+    {
+      "function": "base_events.py:651:run_until_complete",
+      "primitive_calls": 1818,
+      "total_calls": 1818,
+      "total_time_seconds": 0.03261103,
+      "cumulative_time_seconds": 2.543709915
+    },
+    {
+      "function": "base_events.py:627:run_forever",
+      "primitive_calls": 1818,
+      "total_calls": 1818,
+      "total_time_seconds": 0.04525875,
+      "cumulative_time_seconds": 2.427924531
+    },
+    {
+      "function": "base_events.py:1910:_run_once",
+      "primitive_calls": 3645,
+      "total_calls": 3645,
+      "total_time_seconds": 0.170295565,
+      "cumulative_time_seconds": 2.347382435
+    },
+    {
+      "function": "events.py:86:_run",
+      "primitive_calls": 4614,
+      "total_calls": 4614,
+      "total_time_seconds": 0.017944048,
+      "cumulative_time_seconds": 1.868683319
+    },
+    {
+      "function": "~:0:<method 'run' of '_contextvars.Context' objects>",
+      "primitive_calls": 4614,
+      "total_calls": 4614,
+      "total_time_seconds": 0.010712844000000001,
+      "cumulative_time_seconds": 1.8507392710000001
+    },
+    {
+      "function": "base_parser.py:4:get_packets_from_stream",
+      "primitive_calls": 1816,
+      "total_calls": 1816,
+      "total_time_seconds": 0.009306372,
+      "cumulative_time_seconds": 1.561720016
+    },
+    {
+      "function": "tshark_json.py:24:_parse_single_packet",
+      "primitive_calls": 1617,
+      "total_calls": 1617,
+      "total_time_seconds": 0.005831986,
+      "cumulative_time_seconds": 1.348733626
+    },
+    {
+      "function": "tshark_json.py:82:packet_from_json_packet",
+      "primitive_calls": 1617,
+      "total_calls": 1617,
+      "total_time_seconds": 0.171365347,
+      "cumulative_time_seconds": 1.298757141
+    }
+  ]
+}
