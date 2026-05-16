@@ -27,6 +27,11 @@ OUI_CSV_FILE = "oui.csv"
 OUTPUT_DIR = "outputs"
 
 
+def _resolve_output_path(output_name: str | Path, output_dir: str | Path | None = None) -> Path:
+    base_dir = Path(output_dir) if output_dir is not None else Path(OUTPUT_DIR)
+    return base_dir / output_name
+
+
 def _mac_to_oui(mac: str | None) -> str | None:
     """Normalize a MAC address to the OUI key format used by the IEEE DB."""
     if not mac:
@@ -664,24 +669,22 @@ def write_benchmark_report(report: BenchmarkReport, path: str | Path) -> Path:
     return output_path
 
 
-def _validate_generated_outputs(device_csv=None, conversation_csv=None, network_json=None):
+def _validate_generated_outputs(device_csv=None, conversation_csv=None, network_json=None, output_dir: str | Path | None = None):
     """Validate generated output files against the regression contracts."""
     errors = []
     if device_csv:
-        errors.extend(validate_device_csv(os.path.join(OUTPUT_DIR, device_csv)))
+        errors.extend(validate_device_csv(_resolve_output_path(device_csv, output_dir)))
     if conversation_csv:
-        errors.extend(validate_conversation_csv(os.path.join(OUTPUT_DIR, conversation_csv)))
+        errors.extend(validate_conversation_csv(_resolve_output_path(conversation_csv, output_dir)))
     if network_json:
-        errors.extend(validate_network_json(os.path.join(OUTPUT_DIR, network_json)))
+        errors.extend(validate_network_json(_resolve_output_path(network_json, output_dir)))
     return errors
 
-def write_csv_report(device_info, output_csv):
+def write_csv_report(device_info, output_csv, output_dir: str | Path | None = None):
     """Write device information to a CSV file."""
     try:
-        # Create outputs directory if it doesn't exist
-        os.makedirs(OUTPUT_DIR, exist_ok=True)
-        
-        output_path = os.path.join(OUTPUT_DIR, output_csv)
+        output_path = _resolve_output_path(output_csv, output_dir)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
         
         with open(output_path, "w", newline="") as csv_file:
             writer = csv.writer(csv_file)
@@ -758,13 +761,11 @@ def deduplicate_protocols(protocols_set):
     # Join back with commas
     return ",".join(unique_protocols)
 
-def write_conversation_report(conversation_data, output_csv):
+def write_conversation_report(conversation_data, output_csv, output_dir: str | Path | None = None):
     """Write conversation data to a CSV file."""
     try:
-        # Create outputs directory if it doesn't exist
-        os.makedirs(OUTPUT_DIR, exist_ok=True)
-        
-        output_path = os.path.join(OUTPUT_DIR, output_csv)
+        output_path = _resolve_output_path(output_csv, output_dir)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
         
         with open(output_path, "w", newline="", encoding='utf-8') as csv_file:
             writer = csv.writer(csv_file)
@@ -842,13 +843,11 @@ def write_conversation_report(conversation_data, output_csv):
         print(f"\n[!] Error writing conversation CSV file: {e}")
         return False
 
-def write_json_report(device_info, conversation_data, pcap_file, output_json):
+def write_json_report(device_info, conversation_data, pcap_file, output_json, output_dir: str | Path | None = None):
     """Write device and conversation data to a JSON file optimized for visualization."""
     try:
-        # Create outputs directory if it doesn't exist
-        os.makedirs(OUTPUT_DIR, exist_ok=True)
-        
-        output_path = os.path.join(OUTPUT_DIR, output_json)
+        output_path = _resolve_output_path(output_json, output_dir)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
         
         # Create nodes from device_info
         nodes = []
@@ -956,6 +955,7 @@ def main():
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     parser.add_argument("--download-instructions", action="store_true", help="Show instructions for downloading the OUI database")
     parser.add_argument("--output", help="Output base filename (default: <pcap_name>)")
+    parser.add_argument("--output-dir", default=OUTPUT_DIR, help="Directory for generated reports (default: outputs)")
     parser.add_argument("--format", choices=["csv", "json", "both"], default="both", 
                        help="Output format: csv, json, or both (default: both)")
     parser.add_argument("--validate-output", action="store_true", help="Validate generated output files against the regression contracts")
@@ -984,10 +984,11 @@ def main():
     # Generate output filenames
     base = os.path.splitext(os.path.basename(args.pcap_file))[0]
     base_output = args.output if args.output else base
+    output_dir = Path(args.output_dir)
 
     if args.benchmark:
         benchmark_report = collect_benchmark_report(args.pcap_file, debug=args.debug)
-        benchmark_output = args.benchmark_output or os.path.join(OUTPUT_DIR, f"{base_output}-benchmark.json")
+        benchmark_output = args.benchmark_output or _resolve_output_path(f"{base_output}-benchmark.json", output_dir)
         benchmark_path = write_benchmark_report(benchmark_report, benchmark_output)
         print(render_benchmark_report(benchmark_report))
         print(f"\n[+] Benchmark report written: {benchmark_path}")
@@ -1018,18 +1019,20 @@ def main():
     
     # Write reports based on format option
     if args.format in ["csv", "both"]:
-        write_csv_report(device_info, device_csv)
-        write_conversation_report(conversation_data, conversation_csv)
+        write_csv_report(device_info, device_csv, output_dir=output_dir)
+        write_conversation_report(conversation_data, conversation_csv, output_dir=output_dir)
     
     if args.format in ["json", "both"]:
-        write_json_report(device_info, conversation_data, args.pcap_file, network_json)
+        write_json_report(device_info, conversation_data, args.pcap_file, network_json, output_dir=output_dir)
 
     if args.validate_output:
         validation_errors = []
         if args.format in ["csv", "both"]:
-            validation_errors.extend(_validate_generated_outputs(device_csv=device_csv, conversation_csv=conversation_csv))
+            validation_errors.extend(
+                _validate_generated_outputs(device_csv=device_csv, conversation_csv=conversation_csv, output_dir=output_dir)
+            )
         if args.format in ["json", "both"]:
-            validation_errors.extend(_validate_generated_outputs(network_json=network_json))
+            validation_errors.extend(_validate_generated_outputs(network_json=network_json, output_dir=output_dir))
 
         if validation_errors:
             print("\n[!] Output validation failed:")
