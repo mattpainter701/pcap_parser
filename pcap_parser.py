@@ -38,6 +38,25 @@ def _expand_user_path(path: str | Path | None) -> Path | None:
     return Path(path).expanduser()
 
 
+def _discover_capture_files(pcap_path: str | Path) -> list[Path]:
+    input_path = Path(pcap_path)
+    if input_path.is_dir():
+        capture_files = [
+            path
+            for path in sorted(input_path.iterdir())
+            if path.is_file() and path.suffix.lower() in {".pcap", ".pcapng", ".cap"}
+        ]
+        return capture_files
+    return [input_path]
+
+
+def _build_output_base(capture_path: str | Path, output_prefix: str | None = None) -> str:
+    stem = Path(capture_path).stem
+    if output_prefix:
+        return f"{output_prefix}-{stem}"
+    return stem
+
+
 def _mac_to_oui(mac: str | None) -> str | None:
     """Normalize a MAC address to the OUI key format used by the IEEE DB."""
     if not mac:
@@ -951,68 +970,33 @@ def write_json_report(device_info, conversation_data, pcap_file, output_json, ou
         print(f"\n[!] Error writing JSON file: {e}")
         return False
 
-def main():
-    # Check dependencies before proceeding
-    if not check_tshark_installation():
-        sys.exit(1)
-        
-    parser = argparse.ArgumentParser(description="PCAP Asset and Conversation Discovery Tool")
-    parser.add_argument("pcap_file", help="Path to the pcap file", nargs='?')
-    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
-    parser.add_argument("--download-instructions", action="store_true", help="Show instructions for downloading the OUI database")
-    parser.add_argument("--output", help="Output base filename (default: <pcap_name>)")
-    parser.add_argument("--output-dir", default=OUTPUT_DIR, help="Directory for generated reports (default: outputs)")
-    parser.add_argument("--format", choices=["csv", "json", "both"], default="both", 
-                       help="Output format: csv, json, or both (default: both)")
-    parser.add_argument("--validate-output", action="store_true", help="Validate generated output files against the regression contracts")
-    parser.add_argument("--benchmark", action="store_true", help="Profile parsing and write a benchmark report")
-    parser.add_argument("--benchmark-output", help="Path for benchmark JSON output (default: outputs/<base>-benchmark.json)")
-    args = parser.parse_args()
-
-    # Show download instructions if requested
-    if args.download_instructions:
-        download_oui_instructions()
-        return
-
-    # Check if OUI database file exists
-    if not os.path.exists(OUI_FILE) and not os.path.exists(OUI_CSV_FILE):
-        print("[!] OUI database file not found.")
-        download_oui_instructions()
-
-    # Ensure pcap_file is provided if not showing download instructions
-    if not args.pcap_file:
-        parser.error("the following arguments are required: pcap_file")
-
-    if not os.path.isfile(args.pcap_file):
-        print(f"[-] File not found: {args.pcap_file}")
-        return
-
-    # Generate output filenames
-    base = os.path.splitext(os.path.basename(args.pcap_file))[0]
-    base_output = args.output if args.output else base
-    output_dir = _expand_user_path(args.output_dir) or Path(OUTPUT_DIR)
-
+def _process_capture_file(
+    capture_file: str | Path,
+    *,
+    args: argparse.Namespace,
+    output_dir: Path,
+    output_base: str,
+) -> bool:
     if args.benchmark:
-        benchmark_report = collect_benchmark_report(args.pcap_file, debug=args.debug)
+        benchmark_report = collect_benchmark_report(capture_file, debug=args.debug)
         benchmark_output = (
             _expand_user_path(args.benchmark_output)
             if args.benchmark_output
-            else _resolve_output_path(f"{base_output}-benchmark.json", output_dir)
+            else _resolve_output_path(f"{output_base}-benchmark.json", output_dir)
         )
         benchmark_path = write_benchmark_report(benchmark_report, benchmark_output)
         print(render_benchmark_report(benchmark_report))
         print(f"\n[+] Benchmark report written: {benchmark_path}")
-        return
+        return True
 
-    # Extract both device info and conversation data
     start_time = time.time()
-    result = extract_device_info(args.pcap_file, debug=args.debug)
+    result = extract_device_info(str(capture_file), debug=args.debug)
     elapsed_time = time.time() - start_time
-    
+
     if not result:
         print("\n[-] No data extracted from PCAP file.")
-        return
-    
+        return False
+
     device_info, conversation_data = result
 
     if device_info:
@@ -1021,19 +1005,18 @@ def main():
         print(f"[+] Processing time: {elapsed_time:.2f} seconds")
     else:
         print("\n[-] No devices found.")
-        return
+        return False
 
-    device_csv = f"{base_output}-device_info.csv"
-    conversation_csv = f"{base_output}-conversation_info.csv"
-    network_json = f"{base_output}-network_data.json"
-    
-    # Write reports based on format option
+    device_csv = f"{output_base}-device_info.csv"
+    conversation_csv = f"{output_base}-conversation_info.csv"
+    network_json = f"{output_base}-network_data.json"
+
     if args.format in ["csv", "both"]:
         write_csv_report(device_info, device_csv, output_dir=output_dir)
         write_conversation_report(conversation_data, conversation_csv, output_dir=output_dir)
-    
+
     if args.format in ["json", "both"]:
-        write_json_report(device_info, conversation_data, args.pcap_file, network_json, output_dir=output_dir)
+        write_json_report(device_info, conversation_data, str(capture_file), network_json, output_dir=output_dir)
 
     if args.validate_output:
         validation_errors = []
@@ -1051,6 +1034,66 @@ def main():
             sys.exit(1)
 
         print("\n[+] Output validation passed")
+
+    return True
+
+
+def main():
+    # Check dependencies before proceeding
+    if not check_tshark_installation():
+        sys.exit(1)
+
+    parser = argparse.ArgumentParser(description="PCAP Asset and Conversation Discovery Tool")
+    parser.add_argument("pcap_file", help="Path to a pcap file or a directory of captures", nargs='?')
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
+    parser.add_argument("--download-instructions", action="store_true", help="Show instructions for downloading the OUI database")
+    parser.add_argument("--output", help="Output base filename (default: <pcap_name>)")
+    parser.add_argument("--output-dir", default=OUTPUT_DIR, help="Directory for generated reports (default: outputs)")
+    parser.add_argument("--format", choices=["csv", "json", "both"], default="both",
+                       help="Output format: csv, json, or both (default: both)")
+    parser.add_argument("--validate-output", action="store_true", help="Validate generated output files against the regression contracts")
+    parser.add_argument("--benchmark", action="store_true", help="Profile parsing and write a benchmark report")
+    parser.add_argument("--benchmark-output", help="Path for benchmark JSON output (default: outputs/<base>-benchmark.json)")
+    args = parser.parse_args()
+
+    if args.download_instructions:
+        download_oui_instructions()
+        return
+
+    if not os.path.exists(OUI_FILE) and not os.path.exists(OUI_CSV_FILE):
+        print("[!] OUI database file not found.")
+        download_oui_instructions()
+
+    if not args.pcap_file:
+        parser.error("the following arguments are required: pcap_file")
+
+    input_path = _expand_user_path(args.pcap_file)
+    if input_path is None or not os.path.exists(input_path):
+        print(f"[-] File not found: {args.pcap_file}")
+        return
+
+    output_dir = _expand_user_path(args.output_dir) or Path(OUTPUT_DIR)
+    capture_files = _discover_capture_files(input_path)
+
+    if input_path.is_dir():
+        if not capture_files:
+            print(f"[-] No capture files found in directory: {input_path}")
+            return
+        if args.benchmark:
+            print("[-] Benchmark mode currently accepts a single capture file, not a directory.")
+            return
+        print(f"[+] Found {len(capture_files)} capture file(s) in directory: {input_path}")
+
+    for capture_file in capture_files:
+        base_output = _build_output_base(capture_file, args.output if input_path.is_dir() else None)
+        if not input_path.is_dir() and args.output:
+            base_output = args.output
+
+        if not _process_capture_file(capture_file, args=args, output_dir=output_dir, output_base=base_output):
+            if input_path.is_dir():
+                continue
+            return
+
 
 if __name__ == "__main__":
     main()
