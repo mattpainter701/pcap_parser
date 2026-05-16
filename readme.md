@@ -58,6 +58,9 @@ python pcap_parser.py path/to/capture.pcap --debug
 
 # Profile a capture and write a benchmark report
 python pcap_parser.py path/to/capture.pcap --benchmark
+
+# Run committed golden regression fixtures
+python pcap_parser.py --regression
 ```
 
 ## Output Files
@@ -116,6 +119,14 @@ Canonical schema files live in `schemas/v1.0.0/`:
 - `schema-manifest.json`
 
 Breaking changes require a schema version bump and coordinated downstream migration.
+
+## Regression Fixtures
+Golden fixture documentation lives in [`docs/regression-fixtures.md`](docs/regression-fixtures.md). The suite validates committed PCAP outputs and can compare regenerated outputs with:
+
+```bash
+python -m pytest tests/test_regression_harness.py
+python pcap_parser.py --regression --regression-actual-dir outputs
+```
 
 ## How It Works
 1. The script loads the IEEE OUI database to map MAC address prefixes to vendors

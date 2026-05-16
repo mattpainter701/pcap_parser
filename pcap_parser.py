@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from pcap_regression import (
+    run_regression_suite,
+    summarize_regression_results,
     validate_conversation_csv,
     validate_device_csv,
     validate_network_json,
@@ -1212,10 +1214,6 @@ def _process_capture_file(
 
 
 def main():
-    # Check dependencies before proceeding
-    if not check_tshark_installation():
-        sys.exit(1)
-
     parser = argparse.ArgumentParser(description="PCAP Asset and Conversation Discovery Tool")
     parser.add_argument("pcap_file", help="Path to a pcap file or a directory of captures", nargs='?')
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
@@ -1225,6 +1223,9 @@ def main():
     parser.add_argument("--format", choices=["csv", "json", "both"], default="both",
                        help="Output format: csv, json, or both (default: both)")
     parser.add_argument("--validate-output", action="store_true", help="Validate generated output files against the regression contracts")
+    parser.add_argument("--regression", action="store_true", help="Run the committed golden regression suite and exit")
+    parser.add_argument("--regression-manifest", default="fixtures/regression_manifest.json", help="Regression fixture manifest path")
+    parser.add_argument("--regression-actual-dir", help="Directory containing regenerated outputs to compare against goldens")
     parser.add_argument("--benchmark", action="store_true", help="Profile parsing and write a benchmark report")
     parser.add_argument("--benchmark-output", help="Path for benchmark JSON output (default: outputs/<base>-benchmark.json)")
     args = parser.parse_args()
@@ -1232,6 +1233,20 @@ def main():
     if args.download_instructions:
         download_oui_instructions()
         return
+
+    if args.regression:
+        manifest_path = _expand_user_path(args.regression_manifest) or Path("fixtures/regression_manifest.json")
+        actual_dir = _expand_user_path(args.regression_actual_dir) if args.regression_actual_dir else None
+        results = run_regression_suite(manifest_path, actual_dir=actual_dir)
+        summary = summarize_regression_results(results)
+        print(json.dumps(summary, indent=2))
+        if summary["failed"]:
+            raise SystemExit(1)
+        return
+
+    # Check packet parsing dependency only for commands that process PCAP files.
+    if not check_tshark_installation():
+        sys.exit(1)
 
     if not os.path.exists(OUI_FILE) and not os.path.exists(OUI_CSV_FILE):
         print("[!] OUI database file not found.")

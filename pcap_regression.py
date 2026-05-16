@@ -194,6 +194,16 @@ class RegressionFixture:
     description: str | None = None
 
 
+@dataclass(frozen=True)
+class RegressionResult:
+    fixture: str
+    artifact: str
+    golden: Path
+    actual: Path
+    passed: bool
+    errors: tuple[str, ...] = ()
+
+
 class RegressionValidationError(ValueError):
     """Raised when a fixture or output fails regression validation."""
 
@@ -248,6 +258,115 @@ def validate_network_json(path: str | Path) -> list[str]:
     json_path = Path(path)
     payload = _load_json(json_path)
     return _validate_schema(NETWORK_JSON_SCHEMA, payload, str(json_path))
+
+
+def compare_fixture_outputs(
+    fixture: RegressionFixture,
+    *,
+    actual_dir: str | Path | None = None,
+    timestamp_precision: int = 3,
+) -> list[RegressionResult]:
+    """Compare one fixture's golden files with generated outputs.
+
+    When ``actual_dir`` is omitted, each golden is compared with itself. This is
+    useful for fast CI contract checks that validate committed goldens without
+    requiring tshark/pyshark to regenerate captures. When ``actual_dir`` is
+    provided, expected parser output names follow ``<pcap-stem>-device_info.csv``,
+    ``<pcap-stem>-conversation_info.csv``, and ``<pcap-stem>-network_data.json``.
+    """
+
+    actual_base = Path(actual_dir) if actual_dir is not None else None
+    results: list[RegressionResult] = []
+    for artifact, golden in sorted(fixture.goldens.items()):
+        actual = _actual_path_for_artifact(fixture, artifact, actual_base) if actual_base else golden
+        if not actual.exists():
+            results.append(
+                RegressionResult(
+                    fixture=fixture.name,
+                    artifact=artifact,
+                    golden=golden,
+                    actual=actual,
+                    passed=False,
+                    errors=(f"missing actual output: {actual}",),
+                )
+            )
+            continue
+        errors = _compare_artifact(artifact, golden, actual, timestamp_precision=timestamp_precision)
+        results.append(
+            RegressionResult(
+                fixture=fixture.name,
+                artifact=artifact,
+                golden=golden,
+                actual=actual,
+                passed=not errors,
+                errors=tuple(errors),
+            )
+        )
+    return results
+
+
+def run_regression_suite(
+    manifest_path: str | Path,
+    *,
+    actual_dir: str | Path | None = None,
+    timestamp_precision: int = 3,
+) -> list[RegressionResult]:
+    """Load a fixture manifest and compare every listed golden artifact."""
+
+    results: list[RegressionResult] = []
+    for fixture in load_regression_manifest(manifest_path):
+        results.extend(
+            compare_fixture_outputs(
+                fixture,
+                actual_dir=actual_dir,
+                timestamp_precision=timestamp_precision,
+            )
+        )
+    return results
+
+
+def summarize_regression_results(results: Iterable[RegressionResult]) -> dict[str, Any]:
+    results_list = list(results)
+    failures = [result for result in results_list if not result.passed]
+    return {
+        "total": len(results_list),
+        "passed": len(results_list) - len(failures),
+        "failed": len(failures),
+        "failures": [
+            {
+                "fixture": result.fixture,
+                "artifact": result.artifact,
+                "golden": str(result.golden),
+                "actual": str(result.actual),
+                "errors": list(result.errors),
+            }
+            for result in failures
+        ],
+    }
+
+
+def _actual_path_for_artifact(fixture: RegressionFixture, artifact: str, actual_dir: Path) -> Path:
+    stem = fixture.pcap.stem
+    suffix_by_artifact = {
+        "device_csv": "device_info.csv",
+        "conversation_csv": "conversation_info.csv",
+        "network_json": "network_data.json",
+    }
+    try:
+        suffix = suffix_by_artifact[artifact]
+    except KeyError as exc:
+        raise RegressionValidationError(f"unsupported golden artifact: {artifact}") from exc
+    return actual_dir / f"{stem}-{suffix}"
+
+
+def _compare_artifact(artifact: str, golden: Path, actual: Path, *, timestamp_precision: int) -> list[str]:
+    if artifact == "device_csv":
+        return compare_device_csv(golden, actual, timestamp_precision=timestamp_precision)
+    if artifact == "conversation_csv":
+        return compare_conversation_csv(golden, actual, timestamp_precision=timestamp_precision)
+    if artifact == "network_json":
+        return compare_network_json(golden, actual)
+    return [f"unsupported golden artifact: {artifact}"]
 
 
 def compare_device_csv(golden_path: str | Path, actual_path: str | Path, *, timestamp_precision: int = 3) -> list[str]:
@@ -513,7 +632,7 @@ def _normalize_timestamp(value: str, *, precision: int) -> str:
 def _normalize_optional_int(value: str) -> str:
     if value == "":
         return ""
-    return str(int(value))
+    return str(_parse_int(value))
 
 
 def _normalize_list(value: str) -> str:
@@ -524,10 +643,14 @@ def _normalize_list(value: str) -> str:
 
 def _validate_int(value: str, path: Path, row_number: int, field: str) -> list[str]:
     try:
-        int(value)
+        _parse_int(value)
     except Exception:
         return [f"{path}: line {row_number}: {field!r} must be an integer, got {value!r}"]
     return []
+
+
+def _parse_int(value: str) -> int:
+    return int(str(value).strip(), 0)
 
 
 def _validate_optional_int(value: str, path: Path, row_number: int, field: str) -> list[str]:

@@ -2,19 +2,23 @@
   "schema_version": "1.0",
   "fixtures": [
     {
-      "name": "misc_cap",
+      "name": "misc_cap_mixed_ipv4",
       "pcap": "../pcaps/misc_cap.pcapng",
-      "description": "Mixed IPv4 capture used as a baseline device CSV golden.",
+      "description": "Mixed IPv4 capture baseline with device, conversation, and topology JSON goldens.",
       "goldens": {
-        "device_csv": "../outputs/misc_cap-device_info.csv"
+        "device_csv": "../outputs/misc_cap-device_info.csv",
+        "conversation_csv": "../outputs/misc_cap-conversation_info.csv",
+        "network_json": "../outputs/misc_cap-network_data.json"
       }
     },
     {
-      "name": "vlan_240",
+      "name": "vlan_240_tagged",
       "pcap": "../pcaps/vlan-240.pcapng",
-      "description": "VLAN-tagged capture used as a second regression baseline.",
+      "description": "VLAN-tagged capture baseline with device, conversation, and topology JSON goldens.",
       "goldens": {
-        "device_csv": "../outputs/vlan-240-device_info.csv"
+        "device_csv": "../outputs/vlan-240-device_info.csv",
+        "conversation_csv": "../outputs/vlan-240-conversation_info.csv",
+        "network_json": "../outputs/vlan-240-network_data.json"
       }
     }
   ]

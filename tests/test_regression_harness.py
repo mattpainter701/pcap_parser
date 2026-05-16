@@ -11,6 +11,8 @@ from pcap_regression import (
     compare_device_csv,
     compare_network_json,
     load_regression_manifest,
+    run_regression_suite,
+    summarize_regression_results,
     validate_conversation_csv,
     validate_device_csv,
     validate_network_json,
@@ -28,11 +30,21 @@ DEVICE_FIXTURES = [
 def test_regression_manifest_points_to_existing_fixtures() -> None:
     fixtures = load_regression_manifest(MANIFEST)
 
-    assert [fixture.name for fixture in fixtures] == ["misc_cap", "vlan_240"]
+    assert [fixture.name for fixture in fixtures] == ["misc_cap_mixed_ipv4", "vlan_240_tagged"]
     for fixture in fixtures:
         assert fixture.pcap.exists(), fixture.pcap
         for golden in fixture.goldens.values():
             assert golden.exists(), golden
+
+
+def test_regression_suite_passes_for_committed_goldens() -> None:
+    results = run_regression_suite(MANIFEST)
+    summary = summarize_regression_results(results)
+
+    assert summary["total"] == 6
+    assert summary["passed"] == 6
+    assert summary["failed"] == 0
+    assert summary["failures"] == []
 
 
 @pytest.mark.parametrize("csv_path", DEVICE_FIXTURES)
