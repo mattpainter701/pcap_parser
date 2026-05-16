@@ -164,7 +164,11 @@ class ConversationSummary:
     frame_protocols: set[str] = field(default_factory=set)
     vlan_id: str | None = None
     dsfield: str | None = None
+    diffserv_label: str | None = None
     ip_version: int | None = None
+    service_name: str | None = None
+    service_confidence: float = 0.0
+    traffic_pattern: str | None = None
 
     def __getitem__(self, key: str) -> Any:
         return getattr(self, key)
@@ -652,6 +656,8 @@ def extract_device_info(pcap_file, debug=False, collect_metrics=False, bpf_filte
                     elif transport_protocol == 'UDP':
                         conv.source_udp_port = src_udp_port if is_forward else dst_udp_port
                         conv.target_udp_port = dst_udp_port if is_forward else src_udp_port
+                    # Compute DiffServ label once on first packet
+                    conv.diffserv_label = interpret_diffserv_field(dsfield)
                 
                 # Update timestamps
                 if conv.first_seen is None or pkt_time < conv.first_seen:
@@ -756,7 +762,9 @@ def extract_device_info(pcap_file, debug=False, collect_metrics=False, bpf_filte
     for conv in conversation_data.values():
         if conv.first_seen is not None and conv.last_seen is not None:
             conv.duration = conv.last_seen - conv.first_seen
-    
+
+    _enrich_conversations(conversation_data)
+
     print(f"[+] Processed {processed_count} of {packet_count} packets")
     print(f"[+] Found {len(conversation_data)} unique conversations")
 
@@ -770,6 +778,294 @@ def extract_device_info(pcap_file, debug=False, collect_metrics=False, bpf_filte
         return device_info, conversation_data, metrics
     
     return device_info, conversation_data
+
+# ---------------------------------------------------------------------------
+# Sprint 6: Conversation enrichment — service mapping, traffic pattern
+# classification, and conversation grouping
+# ---------------------------------------------------------------------------
+
+# Traffic pattern classification constants
+PATTERN_STREAMING_BYTE_THRESHOLD = 100_000    # bytes in one direction
+PATTERN_POLLING_MAX_BYTES = 500               # small regular exchanges
+PATTERN_BURST_RATIO = 5.0                     # A→B / B→A ratio for burst detection
+PATTERN_RR_MIN_SYMMETRY = 0.3                 # packets A→B / B→A symmetry bound
+PATTERN_CHATTY_MAX_DURATION = 1.0             # seconds, short rapid exchanges
+
+
+def _classify_traffic_pattern(conv: ConversationSummary) -> str:
+    """Classify a conversation's traffic pattern from packet counts, bytes, duration, and flags.
+
+    Returns one of: request-response, streaming, polling, burst, chatty, peer-to-peer, unknown
+    """
+    total_pkts = conv.packets_a_to_b + conv.packets_b_to_a
+    total_bytes = conv.bytes_a_to_b + conv.bytes_b_to_a
+    duration = conv.duration or 0.0
+    protocol = conv.protocol or ""
+
+    if total_pkts == 0:
+        return "unknown"
+
+    # Compute symmetry ratio (0 = perfectly symmetric, 1 = fully one-way)
+    if max(conv.packets_a_to_b, conv.packets_b_to_a) > 0:
+        pkts_symmetry = min(conv.packets_a_to_b, conv.packets_b_to_a) / max(
+            conv.packets_a_to_b, conv.packets_b_to_a
+        )
+    else:
+        pkts_symmetry = 0.0
+
+    # Streaming: large byte volume, highly asymmetric, long duration
+    if total_bytes > PATTERN_STREAMING_BYTE_THRESHOLD and pkts_symmetry < 0.2:
+        return "streaming"
+    if total_pkts > 50 and pkts_symmetry < 0.1 and duration > 5.0:
+        return "streaming"
+
+    # Polling: small, regular exchanges (low bytes, moderate packets, symmetric)
+    if (
+        total_bytes < PATTERN_POLLING_MAX_BYTES * 2
+        and total_pkts >= 5
+        and pkts_symmetry > PATTERN_RR_MIN_SYMMETRY
+        and duration > 2.0
+    ):
+        return "polling"
+
+    # Burst: many packets in one direction, few in the other
+    if total_pkts > 10 and pkts_symmetry < 0.1 and duration < 2.0:
+        return "burst"
+
+    # Chatty: lots of small rapid exchanges, short duration
+    if (
+        total_pkts > 20
+        and pkts_symmetry > PATTERN_RR_MIN_SYMMETRY
+        and duration > 0
+        and duration < PATTERN_CHATTY_MAX_DURATION
+        and total_bytes / max(total_pkts, 1) < 600  # avg packet size < 600 bytes
+    ):
+        return "chatty"
+
+    # Peer-to-peer: highly symmetric traffic with many packets
+    if pkts_symmetry > 0.7 and total_pkts > 20:
+        return "peer-to-peer"
+
+    # Request-response: moderate symmetry, reasonable packet count
+    if total_pkts >= 2 and pkts_symmetry > PATTERN_RR_MIN_SYMMETRY * 0.5:
+        return "request-response"
+
+    return "request-response"  # default for any meaningful conversation
+
+
+def _group_conversations(
+    conversation_data: dict[Any, ConversationSummary],
+) -> dict[str, list[Any]]:
+    """Group related conversations into logical flows.
+
+    Groups by:
+    - Same client MAC accessing multiple services on same server (e.g. DNS then HTTP)
+    - Conversations between same MAC pair (bidirectional grouping)
+    - Same service across different endpoints (service fan-out)
+
+    Returns dict with keys: 'mac_pairs', 'client_service_chains', 'service_clusters'
+    """
+    # Group by MAC pair (undirected)
+    mac_pair_groups: dict[tuple[str, str], list[Any]] = defaultdict(list)
+    for key, conv in conversation_data.items():
+        sm = conv.source_mac
+        tm = conv.target_mac
+        if not sm or not tm:
+            continue
+        pair = tuple(sorted([sm, tm]))
+        mac_pair_groups[pair].append(key)
+
+    # Identify client-service chains: same source MAC → same target IP
+    # with different ports within a short time window
+    client_chains: dict[tuple[str, str], list[Any]] = defaultdict(list)
+    for key, conv in conversation_data.items():
+        if not conv.source_mac or not conv.target_ip:
+            continue
+        chain_key = (conv.source_mac, conv.target_ip)
+        client_chains[chain_key].append(key)
+
+    # Service clusters: conversations using the same service (by port)
+    service_clusters: dict[str, list[Any]] = defaultdict(list)
+    for key, conv in conversation_data.items():
+        svc = conv.service_name or conv.app_protocol or "unknown"
+        if svc and svc != "unknown":
+            service_clusters[svc].append(key)
+
+    # Build result
+    groups: dict[str, Any] = {
+        "mac_pairs": {},
+        "client_service_chains": {},
+        "service_clusters": {},
+    }
+
+    # Only include groups with 2+ members
+    for pair, keys in mac_pair_groups.items():
+        if len(keys) >= 2:
+            groups["mac_pairs"][f"{pair[0]}<->{pair[1]}"] = {
+                "conversation_count": len(keys),
+                "keys": [str(k) for k in keys],
+            }
+
+    for chain_key, keys in client_chains.items():
+        if len(keys) >= 2:
+            label = f"{chain_key[0]}->{chain_key[1]}"
+            groups["client_service_chains"][label] = {
+                "conversation_count": len(keys),
+                "services": list(
+                    {
+                        conversation_data[k].service_name
+                        or conversation_data[k].app_protocol
+                        or "unknown"
+                        for k in keys
+                    }
+                ),
+                "keys": [str(k) for k in keys],
+            }
+
+    for svc, keys in service_clusters.items():
+        if len(keys) >= 2:
+            groups["service_clusters"][svc] = {
+                "conversation_count": len(keys),
+                "keys": [str(k) for k in keys],
+            }
+
+    return groups
+
+
+def _enrich_conversations(
+    conversation_data: dict[Any, ConversationSummary],
+) -> None:
+    """Post-processing: compute service mapping, traffic pattern, and diffserv labels.
+
+    Mutates each ConversationSummary in place.
+    """
+    for conv in conversation_data.values():
+        svc_name, svc_confidence = infer_service_name(
+            source_tcp_port=conv.source_tcp_port,
+            target_tcp_port=conv.target_tcp_port,
+            source_udp_port=conv.source_udp_port,
+            target_udp_port=conv.target_udp_port,
+            app_protocol=conv.app_protocol,
+            protocol=conv.protocol,
+        )
+        conv.service_name = svc_name
+        conv.service_confidence = round(svc_confidence, 3)
+
+        conv.traffic_pattern = _classify_traffic_pattern(conv)
+
+        # Ensure diffserv_label is set (may have been set during parsing,
+        # but handle the case where it wasn't)
+        if conv.diffserv_label is None and conv.dsfield is not None:
+            conv.diffserv_label = interpret_diffserv_field(conv.dsfield)
+
+
+def _map_vlan_devices(
+    device_info: dict[str, DeviceSummary],
+    conversation_data: dict[Any, ConversationSummary],
+) -> dict[str, dict[str, Any]]:
+    """Build a VLAN-to-device mapping from conversation data.
+
+    Returns dict keyed by VLAN ID with device lists, conversation counts,
+    and per-VLAN traffic statistics.
+    """
+    vlan_map: dict[str, dict[str, Any]] = defaultdict(
+        lambda: {
+            "devices": set(),
+            "conversation_count": 0,
+            "total_packets": 0,
+            "total_bytes": 0,
+        }
+    )
+
+    for conv in conversation_data.values():
+        vlan = conv.vlan_id
+        if not vlan:
+            continue
+        vlan = str(vlan)
+        entry = vlan_map[vlan]
+        entry["conversation_count"] += 1
+        entry["total_packets"] += conv.packets_a_to_b + conv.packets_b_to_a
+        entry["total_bytes"] += conv.bytes_a_to_b + conv.bytes_b_to_a
+        if conv.source_mac:
+            entry["devices"].add(conv.source_mac)
+        if conv.target_mac:
+            entry["devices"].add(conv.target_mac)
+
+    # Convert sets to sorted lists
+    result: dict[str, dict[str, Any]] = {}
+    for vlan, data in sorted(vlan_map.items()):
+        result[vlan] = {
+            "devices": sorted(data["devices"]),
+            "device_count": len(data["devices"]),
+            "conversation_count": data["conversation_count"],
+            "total_packets": data["total_packets"],
+            "total_bytes": data["total_bytes"],
+        }
+
+    return result
+
+
+def enrich_outputs(
+    device_info: dict[str, DeviceSummary],
+    conversation_data: dict[Any, ConversationSummary],
+) -> dict[str, Any]:
+    """Run all Sprint 6 enrichment and return a results dict.
+
+    Returns:
+        dict with keys: vlan_mapping, conversation_groups, service_summary, diffserv_summary
+    """
+    results: dict[str, Any] = {}
+
+    # VLAN-to-device mapping
+    results["vlan_mapping"] = _map_vlan_devices(device_info, conversation_data)
+
+    # Conversation grouping
+    results["conversation_groups"] = _group_conversations(conversation_data)
+
+    # Service summary: aggregate by service name
+    service_agg: dict[str, dict[str, Any]] = defaultdict(
+        lambda: {"count": 0, "total_packets": 0, "total_bytes": 0, "protocols": set()}
+    )
+    for conv in conversation_data.values():
+        svc = conv.service_name or conv.app_protocol or "unknown"
+        service_agg[svc]["count"] += 1
+        service_agg[svc]["total_packets"] += conv.packets_a_to_b + conv.packets_b_to_a
+        service_agg[svc]["total_bytes"] += conv.bytes_a_to_b + conv.bytes_b_to_a
+        if conv.protocol:
+            service_agg[svc]["protocols"].add(conv.protocol)
+
+    results["service_summary"] = {
+        svc: {
+            "conversation_count": data["count"],
+            "total_packets": data["total_packets"],
+            "total_bytes": data["total_bytes"],
+            "protocols": sorted(data["protocols"]),
+        }
+        for svc, data in sorted(service_agg.items(), key=lambda x: -x[1]["count"])
+    }
+
+    # DiffServ summary
+    dscp_agg: dict[str, int] = defaultdict(int)
+    for conv in conversation_data.values():
+        label = conv.diffserv_label
+        if label:
+            dscp_agg[label] += 1
+
+    results["diffserv_summary"] = dict(
+        sorted(dscp_agg.items(), key=lambda x: -x[1])
+    )
+
+    # Traffic pattern summary
+    pattern_agg: dict[str, int] = defaultdict(int)
+    for conv in conversation_data.values():
+        pat = conv.traffic_pattern or "unknown"
+        pattern_agg[pat] += 1
+    results["traffic_pattern_summary"] = dict(
+        sorted(pattern_agg.items(), key=lambda x: -x[1])
+    )
+
+    return results
+
 
 def download_oui_instructions():
     """Print instructions for manually downloading the OUI database."""
@@ -1038,6 +1334,9 @@ def write_conversation_report(conversation_data, output_csv, output_dir: str | P
                 "Target UDP Port",
                 "Protocol",
                 "Application Protocol",
+                "Service Name",
+                "Service Confidence",
+                "Traffic Pattern",
                 "Packets A->B",
                 "Packets B->A",
                 "Bytes A->B",
@@ -1051,6 +1350,7 @@ def write_conversation_report(conversation_data, output_csv, output_dir: str | P
                 "Frame Protocols",
                 "VLAN ID",
                 "DiffServ Field",
+                "DiffServ Label",
                 "IP Version"
             ])
             
@@ -1075,6 +1375,9 @@ def write_conversation_report(conversation_data, output_csv, output_dir: str | P
                     conv['target_udp_port'],
                     conv['protocol'],
                     _select_display_app_protocol(conv),
+                    conv.get('service_name', '') or '',
+                    conv.get('service_confidence', 0.0),
+                    conv.get('traffic_pattern', '') or '',
                     conv['packets_a_to_b'],
                     conv['packets_b_to_a'],
                     conv['bytes_a_to_b'],
@@ -1088,6 +1391,7 @@ def write_conversation_report(conversation_data, output_csv, output_dir: str | P
                     frame_protocols_str,
                     conv['vlan_id'],
                     conv['dsfield'],
+                    conv.get('diffserv_label', '') or '',
                     conv['ip_version']
                 ])
         
@@ -1101,11 +1405,23 @@ def write_conversation_report(conversation_data, output_csv, output_dir: str | P
         print(f"\n[!] Error writing conversation CSV file: {e}")
         return False
 
-def write_json_report(device_info, conversation_data, pcap_file, output_json, output_dir: str | Path | None = None):
-    """Write device and conversation data to a JSON file optimized for visualization."""
+def write_json_report(device_info, conversation_data, pcap_file, output_json, output_dir: str | Path | None = None, enrichment: dict[str, Any] | None = None):
+    """Write device and conversation data to a JSON file optimized for visualization.
+
+    If enrichment data (from enrich_outputs) is provided, VLAN mapping, service
+    summary, DiffServ summary, traffic pattern summary, and conversation groups
+    are included.
+    """
     try:
         output_path = _resolve_output_path(output_json, output_dir)
         output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Pre-compute VLAN mapping if enrichment not provided
+        vlan_mapping = {}
+        if enrichment and "vlan_mapping" in enrichment:
+            vlan_mapping = enrichment["vlan_mapping"]
+        else:
+            vlan_mapping = _map_vlan_devices(device_info, conversation_data)
         
         # Create nodes from device_info
         nodes = []
@@ -1119,6 +1435,12 @@ def write_json_report(device_info, conversation_data, pcap_file, output_json, ou
             for ip_info in info.get('ip_connections', {}).values():
                 all_tcp_ports.update(ip_info.get('tcp_ports', set()))
                 all_udp_ports.update(ip_info.get('udp_ports', set()))
+            
+            # Determine VLAN membership for this device
+            device_vlans = [
+                vlan_id for vlan_id, vdata in vlan_mapping.items()
+                if mac in vdata.get("devices", [])
+            ]
             
             # Format timestamps
             first_seen = datetime.fromtimestamp(info['first_seen']).isoformat() if info.get('first_seen') else None
@@ -1134,7 +1456,8 @@ def write_json_report(device_info, conversation_data, pcap_file, output_json, ou
                 "udp_ports": sorted(all_udp_ports) if all_udp_ports else [],
                 "packet_count": info.get('packet_count', 0),
                 "first_seen": first_seen,
-                "last_seen": last_seen
+                "last_seen": last_seen,
+                "vlans": device_vlans,
             }
             nodes.append(node)
         
@@ -1153,6 +1476,9 @@ def write_json_report(device_info, conversation_data, pcap_file, output_json, ou
                 "target_ip": conv['target_ip'],
                 "protocol": conv['protocol'],
                 "app_protocol": _select_display_app_protocol(conv),
+                "service_name": conv.get('service_name') or None,
+                "service_confidence": conv.get('service_confidence', 0.0),
+                "traffic_pattern": conv.get('traffic_pattern') or None,
                 "source_tcp_port": conv['source_tcp_port'],
                 "target_tcp_port": conv['target_tcp_port'],
                 "source_udp_port": conv['source_udp_port'],
@@ -1161,6 +1487,8 @@ def write_json_report(device_info, conversation_data, pcap_file, output_json, ou
                 "packets_b_to_a": conv['packets_b_to_a'],
                 "bytes_a_to_b": conv['bytes_a_to_b'],
                 "bytes_b_to_a": conv['bytes_b_to_a'],
+                "total_packets": conv['packets_a_to_b'] + conv['packets_b_to_a'],
+                "total_bytes": conv['bytes_a_to_b'] + conv['bytes_b_to_a'],
                 "first_seen": first_seen,
                 "last_seen": last_seen,
                 "duration": round(conv['duration'], 3) if conv.get('duration') else None,
@@ -1170,7 +1498,7 @@ def write_json_report(device_info, conversation_data, pcap_file, output_json, ou
                 "frame_protocols": deduplicate_protocols(conv['frame_protocols']),
                 "vlan_id": conv['vlan_id'],
                 "dsfield": conv['dsfield'],
-                "diffserv_label": interpret_diffserv_field(conv['dsfield']),
+                "diffserv_label": conv.get('diffserv_label') or interpret_diffserv_field(conv['dsfield']),
                 "ip_version": conv['ip_version']
             }
             links.append(link)
@@ -1187,8 +1515,16 @@ def write_json_report(device_info, conversation_data, pcap_file, output_json, ou
         network_data = {
             "metadata": metadata,
             "nodes": nodes,
-            "links": links
+            "links": links,
         }
+
+        # Add enrichment data if provided
+        if enrichment:
+            network_data["vlan_mapping"] = enrichment.get("vlan_mapping", {})
+            network_data["conversation_groups"] = enrichment.get("conversation_groups", {})
+            network_data["service_summary"] = enrichment.get("service_summary", {})
+            network_data["diffserv_summary"] = enrichment.get("diffserv_summary", {})
+            network_data["traffic_pattern_summary"] = enrichment.get("traffic_pattern_summary", {})
         
         # Write JSON to file
         with open(output_path, 'w') as json_file:
@@ -1204,7 +1540,7 @@ def write_json_report(device_info, conversation_data, pcap_file, output_json, ou
         print(f"\n[!] Error writing JSON file: {e}")
         return False
 
-def _compute_stats(device_info, conversation_data, capture_file, elapsed_time):
+def _compute_stats(device_info, conversation_data, capture_file, elapsed_time, *, enriched: bool = False):
     """Compute summary statistics from parsed data without writing output files."""
     total_packets = sum(d.packet_count for d in device_info.values())
     total_bytes = sum(
@@ -1223,7 +1559,7 @@ def _compute_stats(device_info, conversation_data, capture_file, elapsed_time):
         key=lambda x: x[1], reverse=True
     )[:10]
     total_conversation_packets = sum(c.packets_a_to_b + c.packets_b_to_a for c in conversation_data.values())
-    return {
+    result = {
         "pcap_file": str(capture_file),
         "elapsed_seconds": round(elapsed_time, 3),
         "total_packets": total_packets,
@@ -1237,6 +1573,14 @@ def _compute_stats(device_info, conversation_data, capture_file, elapsed_time):
             for k, count in top_convos
         ],
     }
+
+    if enriched:
+        enrichment = enrich_outputs(device_info, conversation_data)
+        result["service_summary"] = enrichment.get("service_summary", {})
+        result["traffic_pattern_summary"] = enrichment.get("traffic_pattern_summary", {})
+        result["diffserv_summary"] = enrichment.get("diffserv_summary", {})
+
+    return result
 
 
 def _process_capture_file(
@@ -1278,7 +1622,7 @@ def _process_capture_file(
 
     # --stats-only: print summary and return without writing output files
     if args.stats_only:
-        stats = _compute_stats(device_info, conversation_data, capture_file, elapsed_time)
+        stats = _compute_stats(device_info, conversation_data, capture_file, elapsed_time, enriched=args.enrich)
         print("\n" + "=" * 56)
         print("  PARSING STATISTICS")
         print("=" * 56)
@@ -1297,6 +1641,19 @@ def _process_capture_file(
             print(f"\n  Top conversations:")
             for label, count in stats['top_conversations']:
                 print(f"    {label}  {count}")
+        # Sprint 6 enrichment summaries
+        if stats.get("service_summary"):
+            print(f"\n  Service breakdown:")
+            for svc, sdata in list(stats["service_summary"].items())[:10]:
+                print(f"    {svc:20s}  {sdata['conversation_count']:>4d} convs  {sdata['total_packets']:>8d} pkts")
+        if stats.get("traffic_pattern_summary"):
+            print(f"\n  Traffic patterns:")
+            for pat, count in stats["traffic_pattern_summary"].items():
+                print(f"    {pat:20s}  {count:>4d}")
+        if stats.get("diffserv_summary"):
+            print(f"\n  DiffServ classes:")
+            for dscp_label, count in list(stats["diffserv_summary"].items())[:10]:
+                print(f"    {dscp_label:25s}  {count:>4d}")
         print("=" * 56)
         return True, (device_info, conversation_data, elapsed_time, capture_file)
 
@@ -1309,7 +1666,9 @@ def _process_capture_file(
         write_conversation_report(conversation_data, conversation_csv, output_dir=output_dir)
 
     if args.format in ["json", "both"]:
-        write_json_report(device_info, conversation_data, str(capture_file), network_json, output_dir=output_dir)
+        # Compute Sprint 6 enrichment for JSON output when --enrich is set
+        enrichment_data = enrich_outputs(device_info, conversation_data) if args.enrich else None
+        write_json_report(device_info, conversation_data, str(capture_file), network_json, output_dir=output_dir, enrichment=enrichment_data)
 
     if args.validate_output:
         validation_errors = []
@@ -1624,6 +1983,10 @@ See SPEC.md for the full sprint roadmap.
                         help="Wireshark/tshark display filter expression (e.g. 'tcp.port==443', 'ip.addr==10.0.0.0/8')")
     parser.add_argument("--compare", action="store_true",
                         help="Diff two captures: pcap_parser.py before.pcap after.pcap --compare")
+    # ----- Sprint 6: Output Quality and Enrichment -----
+    parser.add_argument("--enrich", action="store_true",
+                        help="Enable output enrichment: service mapping, traffic classification, "
+                             "VLAN-device mapping, conversation grouping, DiffServ analysis")
     # ----- Sprint 10: Advanced Analysis -----
     parser.add_argument("--analyze", action="store_true",
                         help="Run advanced analysis: roles, segments, topology, anomalies, timeline, summary")

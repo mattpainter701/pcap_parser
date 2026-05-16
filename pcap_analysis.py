@@ -69,7 +69,11 @@ except ImportError:
         frame_protocols: set[str] = field(default_factory=set)
         vlan_id: str | None = None
         dsfield: str | None = None
+        diffserv_label: str | None = None
         ip_version: int | None = None
+        service_name: str | None = None
+        service_confidence: float = 0.0
+        traffic_pattern: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -494,6 +498,15 @@ def infer_topology(
                 "tcp_ports": sorted(tcp),
                 "udp_ports": sorted(udp),
                 "group": role_info.get("role", "unknown"),
+                "vlans": [],  # populated below if VLAN data available
+                "services": sorted(
+                    {
+                        (c.service_name or c.app_protocol or "unknown")
+                        for c in conversation_data.values()
+                        if c.source_mac == mac or c.target_mac == mac
+                        if c.service_name or c.app_protocol
+                    }
+                ),
             }
         )
 
@@ -512,6 +525,10 @@ def infer_topology(
                 "target": tgt_mac,
                 "protocol": proto,
                 "app_protocols": set(),
+                "service_names": set(),
+                "traffic_patterns": set(),
+                "vlan_ids": set(),
+                "diffserv_labels": set(),
                 "total_packets": 0,
                 "total_bytes": 0,
                 "first_seen": None,
@@ -524,6 +541,15 @@ def infer_topology(
         entry["conversation_count"] += 1
         if conv.app_protocol:
             entry["app_protocols"].add(conv.app_protocol)
+        if getattr(conv, "service_name", None):
+            entry["service_names"].add(conv.service_name)
+        if getattr(conv, "traffic_pattern", None):
+            entry["traffic_patterns"].add(conv.traffic_pattern)
+        if conv.vlan_id:
+            entry["vlan_ids"].add(str(conv.vlan_id))
+        label = getattr(conv, "diffserv_label", None)
+        if label:
+            entry["diffserv_labels"].add(label)
         if conv.first_seen and (
             entry["first_seen"] is None or conv.first_seen < entry["first_seen"]
         ):
@@ -536,6 +562,15 @@ def infer_topology(
     links: list[dict[str, Any]] = []
     for entry in link_agg.values():
         entry["app_protocols"] = sorted(entry["app_protocols"])
+        entry["service_names"] = sorted(entry["service_names"])
+        entry["traffic_patterns"] = sorted(entry["traffic_patterns"])
+        entry["vlan_ids"] = sorted(entry["vlan_ids"])
+        entry["diffserv_labels"] = sorted(entry["diffserv_labels"])
+        # Compute bandwidth in bytes/sec
+        duration = 0.0
+        if entry["first_seen"] and entry["last_seen"]:
+            duration = max(entry["last_seen"] - entry["first_seen"], 0.001)
+        entry["bandwidth_bytes_per_sec"] = round(entry["total_bytes"] / duration, 1) if duration > 0 else 0.0
         # Convert timestamps to ISO strings
         if entry["first_seen"]:
             entry["first_seen"] = datetime.fromtimestamp(entry["first_seen"]).isoformat()
@@ -546,6 +581,17 @@ def infer_topology(
         else:
             entry.pop("last_seen")
         links.append(entry)
+
+    # Populate VLAN membership on nodes
+    node_vlans: dict[str, set[str]] = defaultdict(set)
+    for link in links:
+        for vlan in link.get("vlan_ids", []):
+            node_vlans[link["source"]].add(vlan)
+            node_vlans[link["target"]].add(vlan)
+    for node in nodes:
+        mac = node["id"]
+        if mac in node_vlans:
+            node["vlans"] = sorted(node_vlans[mac])
 
     return {
         "nodes": nodes,

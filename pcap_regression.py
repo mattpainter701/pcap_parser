@@ -30,6 +30,9 @@ CONVERSATION_CSV_HEADERS = [
     "Target UDP Port",
     "Protocol",
     "Application Protocol",
+    "Service Name",
+    "Service Confidence",
+    "Traffic Pattern",
     "Packets A->B",
     "Packets B->A",
     "Bytes A->B",
@@ -43,12 +46,13 @@ CONVERSATION_CSV_HEADERS = [
     "Frame Protocols",
     "VLAN ID",
     "DiffServ Field",
+    "DiffServ Label",
     "IP Version",
 ]
 
 NETWORK_JSON_SCHEMA = {
     "type": "object",
-    "additionalProperties": False,
+    "additionalProperties": True,
     "required": ["metadata", "nodes", "links"],
     "properties": {
         "metadata": {
@@ -66,7 +70,7 @@ NETWORK_JSON_SCHEMA = {
             "type": "array",
             "items": {
                 "type": "object",
-                "additionalProperties": False,
+                "additionalProperties": True,
                 "required": [
                     "id",
                     "label",
@@ -95,7 +99,7 @@ NETWORK_JSON_SCHEMA = {
             "type": "array",
             "items": {
                 "type": "object",
-                "additionalProperties": False,
+                "additionalProperties": True,
                 "required": [
                     "source",
                     "target",
@@ -389,7 +393,7 @@ def compare_conversation_csv(golden_path: str | Path, actual_path: str | Path, *
         Path(actual_path),
         CONVERSATION_CSV_HEADERS,
         key_fields=("Source IP", "Target IP", "Protocol", "Source TCP Port", "Source UDP Port"),
-        float_fields=("Duration (seconds)",),
+        float_fields=("Duration (seconds)", "Service Confidence"),
         int_fields=(
             "Source TCP Port",
             "Source UDP Port",

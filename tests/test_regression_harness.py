@@ -86,8 +86,8 @@ def test_conversation_csv_validation_accepts_expected_shape(tmp_path: Path) -> N
     path.write_text(
         "\n".join(
             [
-                "Source IP,Source MAC,Source TCP Port,Source UDP Port,Target IP,Target MAC,Target TCP Port,Target UDP Port,Protocol,Application Protocol,Packets A->B,Packets B->A,Bytes A->B,Bytes B->A,First Seen,Last Seen,Duration (seconds),Conversation Status,TCP Flags,Stream ID,Frame Protocols,VLAN ID,DiffServ Field,IP Version",
-                '10.0.0.1,aa:bb:cc:dd:ee:ff,443,,10.0.0.2,11:22:33:44:55:66,51515,,TCP,TLS,4,2,600,300,2024-01-01T00:00:00,2024-01-01T00:00:02,2.0,response,SYN,7,eth:ip:tcp,240,10,4',
+                "Source IP,Source MAC,Source TCP Port,Source UDP Port,Target IP,Target MAC,Target TCP Port,Target UDP Port,Protocol,Application Protocol,Service Name,Service Confidence,Traffic Pattern,Packets A->B,Packets B->A,Bytes A->B,Bytes B->A,First Seen,Last Seen,Duration (seconds),Conversation Status,TCP Flags,Stream ID,Frame Protocols,VLAN ID,DiffServ Field,DiffServ Label,IP Version",
+                '10.0.0.1,aa:bb:cc:dd:ee:ff,443,,10.0.0.2,11:22:33:44:55:66,51515,,TCP,TLS,HTTPS,0.98,request-response,4,2,600,300,2024-01-01T00:00:00,2024-01-01T00:00:02,2.0,response,SYN,7,eth:ip:tcp,240,10,CS0 / Not-ECT,4',
             ]
         )
         + "\n",
@@ -101,14 +101,14 @@ def test_conversation_csv_comparison_allows_row_reordering_and_duration_jitter(t
     golden = tmp_path / "golden-conv.csv"
     actual = tmp_path / "actual-conv.csv"
     headers = (
-        "Source IP,Source MAC,Source TCP Port,Source UDP Port,Target IP,Target MAC,Target TCP Port,Target UDP Port,Protocol,Application Protocol,Packets A->B,Packets B->A,Bytes A->B,Bytes B->A,First Seen,Last Seen,Duration (seconds),Conversation Status,TCP Flags,Stream ID,Frame Protocols,VLAN ID,DiffServ Field,IP Version\n"
+        "Source IP,Source MAC,Source TCP Port,Source UDP Port,Target IP,Target MAC,Target TCP Port,Target UDP Port,Protocol,Application Protocol,Service Name,Service Confidence,Traffic Pattern,Packets A->B,Packets B->A,Bytes A->B,Bytes B->A,First Seen,Last Seen,Duration (seconds),Conversation Status,TCP Flags,Stream ID,Frame Protocols,VLAN ID,DiffServ Field,DiffServ Label,IP Version\n"
     )
     golden.write_text(
         headers
         + "\n".join(
             [
-                '10.0.0.1,aa:bb:cc:dd:ee:ff,443,,10.0.0.2,11:22:33:44:55:66,51515,,TCP,TLS,4,2,600,300,2024-01-01T00:00:00,2024-01-01T00:00:02,2.0001,response,SYN,7,eth:ip:tcp,240,10,4',
-                '10.0.0.3,aa:bb:cc:dd:ee:11,,,10.0.0.4,11:22:33:44:55:77,,,UDP,DNS,1,0,100,0,2024-01-01T00:00:03,2024-01-01T00:00:04,1.0,no-response,,8,eth:ip:udp,,,4',
+                '10.0.0.1,aa:bb:cc:dd:ee:ff,443,,10.0.0.2,11:22:33:44:55:66,51515,,TCP,TLS,HTTPS,0.98,request-response,4,2,600,300,2024-01-01T00:00:00,2024-01-01T00:00:02,2.0001,response,SYN,7,eth:ip:tcp,240,10,CS0 / Not-ECT,4',
+                '10.0.0.3,aa:bb:cc:dd:ee:11,,,10.0.0.4,11:22:33:44:55:77,,,UDP,DNS,DNS,0.98,polling,1,0,100,0,2024-01-01T00:00:03,2024-01-01T00:00:04,1.0,no-response,,8,eth:ip:udp,,,CS0 / Not-ECT,4',
             ]
         )
         + "\n",
@@ -118,8 +118,8 @@ def test_conversation_csv_comparison_allows_row_reordering_and_duration_jitter(t
         headers
         + "\n".join(
             [
-                '10.0.0.3,aa:bb:cc:dd:ee:11,,,10.0.0.4,11:22:33:44:55:77,,,UDP,DNS,1,0,100,0,2024-01-01T00:00:03,2024-01-01T00:00:04,1.0002,no-response,,8,eth:ip:udp,,,4',
-                '10.0.0.1,aa:bb:cc:dd:ee:ff,443,,10.0.0.2,11:22:33:44:55:66,51515,,TCP,TLS,4,2,600,300,2024-01-01T00:00:00,2024-01-01T00:00:02,2.0002,response,SYN,7,eth:ip:tcp,240,10,4',
+                '10.0.0.3,aa:bb:cc:dd:ee:11,,,10.0.0.4,11:22:33:44:55:77,,,UDP,DNS,DNS,0.98,polling,1,0,100,0,2024-01-01T00:00:03,2024-01-01T00:00:04,1.0002,no-response,,8,eth:ip:udp,,,CS0 / Not-ECT,4',
+                '10.0.0.1,aa:bb:cc:dd:ee:ff,443,,10.0.0.2,11:22:33:44:55:66,51515,,TCP,TLS,HTTPS,0.98,request-response,4,2,600,300,2024-01-01T00:00:00,2024-01-01T00:00:02,2.0002,response,SYN,7,eth:ip:tcp,240,10,CS0 / Not-ECT,4',
             ]
         )
         + "\n",
