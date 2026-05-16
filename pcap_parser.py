@@ -16,6 +16,22 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
+try:
+    from tqdm import tqdm
+    HAS_TQDM = True
+except ImportError:
+    HAS_TQDM = False
+    # tqdm-less no-op progress stub
+    class _ProgressStub:
+        def update(self, n=1): pass
+        def close(self): pass
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+    def tqdm(iterable=None, **kwargs):
+        if iterable is not None:
+            return iterable
+        return _ProgressStub()
+
 from pcap_regression import (
     run_regression_suite,
     summarize_regression_results,
@@ -443,18 +459,32 @@ def check_tshark_installation():
         print("    pip install pyshark")
         return False
 
-def extract_device_info(pcap_file, debug=False, collect_metrics=False):
+def extract_device_info(pcap_file, debug=False, collect_metrics=False, bpf_filter=None):
     """
     Extracts device information from all packets in the provided pcap file.
     Now extracting detailed conversation data between pairs of IP addresses.
+
+    Args:
+        pcap_file: Path to a PCAP/PCAPNG file.
+        debug: Enable debug-level logging per packet.
+        collect_metrics: Return a third metrics dict alongside (device_info, conversation_data).
+        bpf_filter: Optional BPF-style display filter passed to PyShark (e.g. "ip", "tcp.port==443").
     """
     print(f"\n[+] Loading capture file: {pcap_file}")
+    if bpf_filter:
+        print(f"[+] Applying display filter: {bpf_filter}")
     
     try:
-        capture = pyshark.FileCapture(pcap_file, keep_packets=False, use_json=True)
+        kwargs = {"keep_packets": False, "use_json": True}
+        if bpf_filter:
+            kwargs["display_filter"] = bpf_filter
+        capture = pyshark.FileCapture(pcap_file, **kwargs)
     except Exception as e:
         print(f"[!] Error opening capture file: {e}")
-        print("[!] Make sure the file exists and is a valid PCAP file")
+        if bpf_filter:
+            print("[!] The display filter may be invalid. Try without --filter.")
+        else:
+            print("[!] Make sure the file exists and is a valid PCAP file")
         return None
 
     # Track device information keyed by MAC address
@@ -466,9 +496,21 @@ def extract_device_info(pcap_file, debug=False, collect_metrics=False):
     packet_count = 0
     processed_count = 0
     
+    # Try to get total packet estimate for progress bar
+    total_estimate = None
+    try:
+        total_estimate = int(capture.captured_length)
+    except (TypeError, ValueError, AttributeError):
+        pass
+    
+    progress = tqdm(desc=f"Parsing {Path(pcap_file).name}", unit=" pkt",
+                    total=total_estimate, disable=(not os.isatty(1)))
+    
     try:
         for pkt in capture:
             packet_count += 1
+            if packet_count % 100 == 0:
+                progress.update(100)
             try:
                 transport_protocol = pkt.transport_layer if hasattr(pkt, 'transport_layer') else None
                 if transport_protocol not in {"TCP", "UDP"}:
@@ -697,8 +739,9 @@ def extract_device_info(pcap_file, debug=False, collect_metrics=False):
     except KeyboardInterrupt:
         print("\n[!] Processing interrupted by user")
     except Exception as e:
-        print(f"[!] Error processing packets: {e}")
+        print(f"\n[!] Error processing packets: {e}")
     finally:
+        progress.close()
         capture.close()
     
     _populate_device_vendors(device_info)
@@ -1155,6 +1198,41 @@ def write_json_report(device_info, conversation_data, pcap_file, output_json, ou
         print(f"\n[!] Error writing JSON file: {e}")
         return False
 
+def _compute_stats(device_info, conversation_data, capture_file, elapsed_time):
+    """Compute summary statistics from parsed data without writing output files."""
+    total_packets = sum(d.packet_count for d in device_info.values())
+    total_bytes = sum(
+        c.bytes_a_to_b + c.bytes_b_to_a for c in conversation_data.values()
+    )
+    protocols = set()
+    for c in conversation_data.values():
+        if c.protocol:
+            protocols.add(c.protocol)
+    top_talkers = sorted(
+        [(mac, d.packet_count) for mac, d in device_info.items()],
+        key=lambda x: x[1], reverse=True
+    )[:10]
+    top_convos = sorted(
+        [(k, c.packets_a_to_b + c.packets_b_to_a) for k, c in conversation_data.items()],
+        key=lambda x: x[1], reverse=True
+    )[:10]
+    total_conversation_packets = sum(c.packets_a_to_b + c.packets_b_to_a for c in conversation_data.values())
+    return {
+        "pcap_file": str(capture_file),
+        "elapsed_seconds": round(elapsed_time, 3),
+        "total_packets": total_packets,
+        "total_bytes": total_bytes,
+        "device_count": len(device_info),
+        "conversation_count": len(conversation_data),
+        "protocols_detected": sorted(protocols),
+        "top_talkers": [(mac, count) for mac, count in top_talkers],
+        "top_conversations": [
+            (f"{k[0]}:{k[2]} <-> {k[1]}:{k[3]} ({k[4]})", count)
+            for k, count in top_convos
+        ],
+    }
+
+
 def _process_capture_file(
     capture_file: str | Path,
     *,
@@ -1175,7 +1253,7 @@ def _process_capture_file(
         return True
 
     start_time = time.time()
-    result = extract_device_info(str(capture_file), debug=args.debug)
+    result = extract_device_info(str(capture_file), debug=args.debug, bpf_filter=args.filter)
     elapsed_time = time.time() - start_time
 
     if not result:
@@ -1191,6 +1269,30 @@ def _process_capture_file(
     else:
         print("\n[-] No devices found.")
         return False
+
+    # --stats-only: print summary and return without writing output files
+    if args.stats_only:
+        stats = _compute_stats(device_info, conversation_data, capture_file, elapsed_time)
+        print("\n" + "=" * 56)
+        print("  PARSING STATISTICS")
+        print("=" * 56)
+        print(f"  PCAP file:          {stats['pcap_file']}")
+        print(f"  Processing time:    {stats['elapsed_seconds']}s")
+        print(f"  Total packets:      {stats['total_packets']}")
+        print(f"  Total bytes:        {stats['total_bytes']}")
+        print(f"  Devices:            {stats['device_count']}")
+        print(f"  Conversations:      {stats['conversation_count']}")
+        print(f"  Protocols detected: {', '.join(stats['protocols_detected']) or 'none'}")
+        if stats['top_talkers']:
+            print(f"\n  Top talkers (MAC, packets):")
+            for mac, count in stats['top_talkers']:
+                print(f"    {mac}  {count}")
+        if stats['top_conversations']:
+            print(f"\n  Top conversations:")
+            for label, count in stats['top_conversations']:
+                print(f"    {label}  {count}")
+        print("=" * 56)
+        return True
 
     device_csv = f"{output_base}-device_info.csv"
     conversation_csv = f"{output_base}-conversation_info.csv"
@@ -1223,21 +1325,159 @@ def _process_capture_file(
     return True
 
 
+def _run_compare_mode(
+    left_path: str,
+    right_path: str,
+    *,
+    args: argparse.Namespace,
+    output_dir: Path,
+) -> None:
+    """Parse two PCAPs and diff their outputs printed to stdout."""
+    print(f"\n{'=' * 60}")
+    print("  COMPARE MODE")
+    print(f"{'=' * 60}")
+    
+    for label, path in [("LEFT", left_path), ("RIGHT", right_path)]:
+        p = _expand_user_path(path)
+        if p is None or not os.path.exists(p):
+            print(f"[-] {label} file not found: {path}")
+            return
+
+    left_devices = []
+    left_convs = []
+    right_devices = []
+    right_convs = []
+    
+    for label, path, dev_list, conv_list in [
+        ("LEFT", left_path, left_devices, left_convs),
+        ("RIGHT", right_path, right_devices, right_convs),
+    ]:
+        print(f"\n  Parsing {label}: {path}")
+        result = extract_device_info(
+            _expand_user_path(path), debug=args.debug, bpf_filter=args.filter
+        )
+        if not result:
+            print(f"  {label}: no data")
+            return
+        device_info, conversation_data = result
+        dev_list.extend((k, d) for k, d in device_info.items())
+        conv_list.extend((k, c) for k, c in conversation_data.items())
+
+    # Compare device counts
+    left_dev_count = len(left_devices)
+    right_dev_count = len(right_devices)
+    left_macs = {k for k, _ in left_devices}
+    right_macs = {k for k, _ in right_devices}
+    new_macs = right_macs - left_macs
+    removed_macs = left_macs - right_macs
+
+    left_conv_count = len(left_convs)
+    right_conv_count = len(right_convs)
+    left_conv_keys = {k for k, _ in left_convs}
+    right_conv_keys = {k for k, _ in right_convs}
+    new_convs = right_conv_keys - left_conv_keys
+    removed_convs = left_conv_keys - right_conv_keys
+
+    print(f"\n{'=' * 60}")
+    print("  DIFF SUMMARY")
+    print(f"{'=' * 60}")
+    print(f"  Devices:     {left_dev_count} -> {right_dev_count} ({'+' if right_dev_count >= left_dev_count else ''}{right_dev_count - left_dev_count})")
+    print(f"  Convs:       {left_conv_count} -> {right_conv_count} ({'+' if right_conv_count >= left_conv_count else ''}{right_conv_count - left_conv_count})")
+
+    if removed_macs:
+        print(f"\n  Devices removed ({len(removed_macs)}):")
+        for mac in sorted(removed_macs):
+            print(f"    - {mac}")
+    if new_macs:
+        print(f"\n  Devices added ({len(new_macs)}):")
+        for mac in sorted(new_macs):
+            print(f"    + {mac}")
+    if removed_convs:
+        print(f"\n  Conversations removed ({len(removed_convs)}):")
+        for ck in sorted(removed_convs):
+            print(f"    - {ck[0]}:{ck[2]} <-> {ck[1]}:{ck[3]} ({ck[4]})")
+    if new_convs:
+        print(f"\n  Conversations added ({len(new_convs)}):")
+        for ck in sorted(new_convs):
+            print(f"    + {ck[0]}:{ck[2]} <-> {ck[1]}:{ck[3]} ({ck[4]})")
+
+    # Packet count diffs for conversations that exist in both
+    shared_convs = left_conv_keys & right_conv_keys
+    if shared_convs:
+        changes = []
+        for ck in shared_convs:
+            left_c = next(c for k, c in left_convs if k == ck)
+            right_c = next(c for k, c in right_convs if k == ck)
+            left_pkts = left_c.packets_a_to_b + left_c.packets_b_to_a
+            right_pkts = right_c.packets_a_to_b + right_c.packets_b_to_a
+            diff = right_pkts - left_pkts
+            if diff != 0:
+                changes.append((ck, diff, left_pkts, right_pkts))
+        if changes:
+            print(f"\n  Packet count changes (shared conversations):")
+            for ck, diff, left_pkts, right_pkts in sorted(changes, key=lambda x: -abs(x[1]))[:10]:
+                print(f"    {ck[0]}:{ck[2]} <-> {ck[1]}:{ck[3]} ({ck[4]}): {left_pkts} -> {right_pkts} ({'+' if diff > 0 else ''}{diff})")
+
+    print(f"\n{'=' * 60}")
+
+
 def main():
-    parser = argparse.ArgumentParser(description="PCAP Asset and Conversation Discovery Tool")
-    parser.add_argument("pcap_file", help="Path to a pcap file or a directory of captures", nargs='?')
-    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
-    parser.add_argument("--download-instructions", action="store_true", help="Show instructions for downloading the OUI database")
-    parser.add_argument("--output", help="Output base filename (default: <pcap_name>)")
-    parser.add_argument("--output-dir", default=OUTPUT_DIR, help="Directory for generated reports (default: outputs)")
+    parser = argparse.ArgumentParser(
+        description="PCAP Network Capture Analyzer — extract device inventories, "
+                    "conversation flows, and structured reports from PCAP/PCAPNG files.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""examples:
+  Parse a single capture and write CSV+JSON reports:
+    pcap_parser.py capture.pcapng
+
+  Process all PCAPs in a directory with a common output prefix:
+    pcap_parser.py ./captures/ --output myaudit
+
+  Quick statistics without writing output files:
+    pcap_parser.py large_capture.pcap --stats-only
+
+  Filter packets with a display filter (Wireshark/tshark syntax):
+    pcap_parser.py capture.pcap --filter "tcp.port==443"
+
+  Diff two captures to see what changed:
+    pcap_parser.py before.pcap after.pcap --compare
+
+  Profile parsing performance:
+    pcap_parser.py capture.pcapng --benchmark
+
+See SPEC.md for the full sprint roadmap.
+""",
+    )
+    parser.add_argument("pcap_file", nargs="*",
+                        help="Path to a PCAP/PCAPNG file or directory of captures")
+    parser.add_argument("--debug", action="store_true",
+                        help="Enable verbose per-packet debug logging")
+    parser.add_argument("--download-instructions", action="store_true",
+                        help="Show instructions for downloading the IEEE OUI database")
+    parser.add_argument("--output",
+                        help="Output base filename (default: derived from pcap file name)")
+    parser.add_argument("--output-dir", default=OUTPUT_DIR,
+                        help=f"Directory for generated reports (default: {OUTPUT_DIR})")
     parser.add_argument("--format", choices=["csv", "json", "both"], default="both",
-                       help="Output format: csv, json, or both (default: both)")
-    parser.add_argument("--validate-output", action="store_true", help="Validate generated output files against the regression contracts")
-    parser.add_argument("--regression", action="store_true", help="Run the committed golden regression suite and exit")
-    parser.add_argument("--regression-manifest", default="fixtures/regression_manifest.json", help="Regression fixture manifest path")
-    parser.add_argument("--regression-actual-dir", help="Directory containing regenerated outputs to compare against goldens")
-    parser.add_argument("--benchmark", action="store_true", help="Profile parsing and write a benchmark report")
-    parser.add_argument("--benchmark-output", help="Path for benchmark JSON output (default: outputs/<base>-benchmark.json)")
+                        help="Output format: csv, json, or both (default: both)")
+    parser.add_argument("--validate-output", action="store_true",
+                        help="Validate generated output files against the regression schema contracts")
+    parser.add_argument("--regression", action="store_true",
+                        help="Run the committed golden regression suite and exit")
+    parser.add_argument("--regression-manifest", default="fixtures/regression_manifest.json",
+                        help="Path to regression fixture manifest (default: fixtures/regression_manifest.json)")
+    parser.add_argument("--regression-actual-dir",
+                        help="Directory containing regenerated outputs to compare against golden fixtures")
+    parser.add_argument("--benchmark", action="store_true",
+                        help="Profile parsing and write a performance benchmark report")
+    parser.add_argument("--benchmark-output",
+                        help="Path for benchmark JSON output (default: outputs/<base>-benchmark.json)")
+    parser.add_argument("--stats-only", action="store_true",
+                        help="Print summary statistics only — no output files written")
+    parser.add_argument("--filter",
+                        help="Wireshark/tshark display filter expression (e.g. 'tcp.port==443', 'ip.addr==10.0.0.0/8')")
+    parser.add_argument("--compare", action="store_true",
+                        help="Diff two captures: pcap_parser.py before.pcap after.pcap --compare")
     args = parser.parse_args()
 
     if args.download_instructions:
@@ -1262,15 +1502,27 @@ def main():
         print("[!] OUI database file not found.")
         download_oui_instructions()
 
-    if not args.pcap_file:
-        parser.error("the following arguments are required: pcap_file")
+    output_dir = _expand_user_path(args.output_dir) or Path(OUTPUT_DIR)
 
-    input_path = _expand_user_path(args.pcap_file)
-    if input_path is None or not os.path.exists(input_path):
-        print(f"[-] File not found: {args.pcap_file}")
+    # --compare mode: parse two PCAPs and diff their outputs
+    if args.compare:
+        if len(args.pcap_file) < 2:
+            print("[-] --compare requires exactly two PCAP file paths: pcap_parser.py left.pcap right.pcap --compare")
+            return
+        left_path, right_path = args.pcap_file[:2]
+        _run_compare_mode(left_path, right_path, args=args, output_dir=output_dir)
         return
 
-    output_dir = _expand_user_path(args.output_dir) or Path(OUTPUT_DIR)
+    # Normal mode: must have exactly one PCAP path
+    if not args.pcap_file or len(args.pcap_file) == 0:
+        parser.error("the following arguments are required: pcap_file")
+
+    pcap_file_arg = args.pcap_file[0]
+    input_path = _expand_user_path(pcap_file_arg)
+    if input_path is None or not os.path.exists(input_path):
+        print(f"[-] File not found: {pcap_file_arg}")
+        return
+
     capture_files = _discover_capture_files(input_path)
 
     if input_path.is_dir():
