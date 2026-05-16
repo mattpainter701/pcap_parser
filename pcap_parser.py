@@ -202,12 +202,68 @@ APP_PROTOCOL_SERVICE_MAP: dict[str, str] = {
     "SSL": "HTTPS",
 }
 
+DIFFSERV_DSCP_NAME_MAP: dict[int, str] = {
+    0: "CS0",
+    8: "CS1",
+    10: "AF11",
+    12: "AF12",
+    14: "AF13",
+    16: "CS2",
+    18: "AF21",
+    20: "AF22",
+    22: "AF23",
+    24: "CS3",
+    26: "AF31",
+    28: "AF32",
+    30: "AF33",
+    32: "CS4",
+    34: "AF41",
+    36: "AF42",
+    38: "AF43",
+    40: "CS5",
+    46: "EF",
+    48: "CS6",
+    56: "CS7",
+}
+
+DIFFSERV_ECN_NAME_MAP: dict[int, str] = {
+    0: "Not-ECT",
+    1: "ECT(1)",
+    2: "ECT(0)",
+    3: "CE",
+}
+
 
 def _normalize_protocol_name(value: str | None) -> str | None:
     if not value:
         return None
     normalized = re.sub(r"[^A-Z0-9]+", "", value.upper())
     return normalized or None
+
+
+def interpret_diffserv_field(dsfield: str | int | None) -> str | None:
+    """Return a compact human-readable DiffServ interpretation.
+
+    The field is treated as the full 8-bit DS field, where the upper 6 bits
+    encode the DSCP and the lower 2 bits encode ECN.
+    """
+
+    if dsfield in (None, ""):
+        return None
+
+    try:
+        value = int(str(dsfield), 0)
+    except (TypeError, ValueError):
+        return None
+
+    if value < 0 or value > 0xFF:
+        return None
+
+    dscp = value >> 2
+    ecn = value & 0x03
+    dscp_label = DIFFSERV_DSCP_NAME_MAP.get(dscp, f"DSCP {dscp}")
+    ecn_label = DIFFSERV_ECN_NAME_MAP.get(ecn, f"ECN {ecn}")
+    return f"{dscp_label} / {ecn_label}"
 
 
 def infer_service_name(
@@ -1053,6 +1109,7 @@ def write_json_report(device_info, conversation_data, pcap_file, output_json, ou
                 "frame_protocols": deduplicate_protocols(conv['frame_protocols']),
                 "vlan_id": conv['vlan_id'],
                 "dsfield": conv['dsfield'],
+                "diffserv_label": interpret_diffserv_field(conv['dsfield']),
                 "ip_version": conv['ip_version']
             }
             links.append(link)

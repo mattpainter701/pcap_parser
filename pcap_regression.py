@@ -146,6 +146,7 @@ NETWORK_JSON_SCHEMA = {
                     "frame_protocols": {"type": ["string", "null"]},
                     "vlan_id": {"type": ["string", "integer", "null"]},
                     "dsfield": {"type": ["string", "integer", "null"]},
+                    "diffserv_label": {"type": ["string", "null"]},
                     "ip_version": {"type": ["integer", "null"], "enum": [4, 6, None]},
                 },
             },

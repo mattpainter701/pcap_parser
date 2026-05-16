@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from pathlib import Path
+import json
 
 import pcap_parser
 
@@ -110,6 +111,54 @@ def test_service_inference_uses_well_known_ports_and_scores_confidence() -> None
 
     assert dns_service == "DNS"
     assert dns_confidence >= 0.95
+
+
+def test_diffserv_interpretation_labels_common_codepoints() -> None:
+    assert pcap_parser.interpret_diffserv_field("0x00") == "CS0 / Not-ECT"
+    assert pcap_parser.interpret_diffserv_field("0xb8") == "EF / Not-ECT"
+    assert pcap_parser.interpret_diffserv_field("0x03") == "CS0 / CE"
+    assert pcap_parser.interpret_diffserv_field("bogus") is None
+
+
+def test_json_report_includes_diffserv_label(tmp_path: Path, monkeypatch: object) -> None:
+    monkeypatch.setattr(pcap_parser, "OUTPUT_DIR", str(tmp_path))
+
+    device_info = defaultdict(pcap_parser.DeviceSummary)
+    device = device_info["aa:bb:cc:dd:ee:ff"]
+    device.vendor = "Vendor One"
+    device.packet_count = 2
+    device.first_seen = 10.0
+    device.last_seen = 12.0
+
+    conversation_data = defaultdict(pcap_parser.ConversationSummary)
+    conv = conversation_data[("10.0.0.1", "10.0.0.2", 443, 51515, "TCP")]
+    conv.source_ip = "10.0.0.1"
+    conv.source_mac = "aa:bb:cc:dd:ee:ff"
+    conv.target_ip = "10.0.0.2"
+    conv.target_mac = "11:22:33:44:55:66"
+    conv.protocol = "TCP"
+    conv.app_protocol = "TLS"
+    conv.source_tcp_port = 443
+    conv.target_tcp_port = 51515
+    conv.packets_a_to_b = 4
+    conv.packets_b_to_a = 2
+    conv.bytes_a_to_b = 600
+    conv.bytes_b_to_a = 300
+    conv.first_seen = 10.0
+    conv.last_seen = 12.0
+    conv.duration = 2.0
+    conv.conversation_status = "response"
+    conv.tcp_flags.update({"SYN", "ACK"})
+    conv.stream_id = 7
+    conv.frame_protocols.add("eth:ip:tcp")
+    conv.vlan_id = 240
+    conv.dsfield = "0xb8"
+    conv.ip_version = 4
+
+    assert pcap_parser.write_json_report(device_info, conversation_data, "capture.pcapng", "network.json") is True
+
+    payload = json.loads((tmp_path / "network.json").read_text(encoding="utf-8"))
+    assert payload["links"][0]["diffserv_label"] == "EF / Not-ECT"
 
 
 def test_conversation_writer_enriches_service_label(tmp_path: Path, monkeypatch: object) -> None:
