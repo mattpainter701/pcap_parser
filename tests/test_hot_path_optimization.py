@@ -2,9 +2,73 @@ from __future__ import annotations
 
 from collections import defaultdict
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+import datetime as dt
 import json
 
 import pcap_parser
+
+
+class FakeCapture:
+    def __init__(self, packets):
+        self.packets = packets
+        self.closed = False
+
+    def __iter__(self):
+        return iter(self.packets)
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def make_packet(*, transport="TCP", src_port="443", dst_port="51515"):
+    flags = SimpleNamespace(syn="1", ack="1", reset="0", fin="0")
+    packet = SimpleNamespace(
+        sniff_time=dt.datetime.fromtimestamp(10.0),
+        ip=SimpleNamespace(src="10.0.0.1", dst="10.0.0.2", dsfield="0x00"),
+        eth=SimpleNamespace(src="aa:bb:cc:dd:ee:ff", dst="11:22:33:44:55:66"),
+        length="128",
+        transport_layer=transport,
+        highest_layer=transport,
+        frame_info=SimpleNamespace(protocols=f"eth:ip:{transport.lower()}"),
+    )
+    if transport == "TCP":
+        packet.tcp = SimpleNamespace(srcport=src_port, dstport=dst_port, stream="1", flags=flags)
+    elif transport == "UDP":
+        packet.udp = SimpleNamespace(srcport=src_port, dstport=dst_port)
+    return packet
+
+
+def test_capture_uses_low_materialization_pyshark_options(monkeypatch: Any) -> None:
+    created: dict[str, object] = {}
+
+    def fake_file_capture(pcap_file, **kwargs):
+        created["pcap_file"] = pcap_file
+        created["kwargs"] = kwargs
+        return FakeCapture([])
+
+    monkeypatch.setattr(pcap_parser.pyshark, "FileCapture", fake_file_capture)
+
+    result = pcap_parser.extract_device_info("sample.pcapng", collect_metrics=True)
+
+    assert result is not None
+    assert created == {
+        "pcap_file": "sample.pcapng",
+        "kwargs": {"keep_packets": False, "use_json": True},
+    }
+
+
+def test_extract_device_info_filters_non_tcp_udp_packets_early(monkeypatch: Any) -> None:
+    icmp_packet = make_packet(transport="ICMP")
+    monkeypatch.setattr(pcap_parser.pyshark, "FileCapture", lambda *args, **kwargs: FakeCapture([icmp_packet]))
+
+    device_info, conversation_data, metrics = pcap_parser.extract_device_info("sample.pcapng", collect_metrics=True)
+
+    assert metrics["packet_count"] == 1
+    assert metrics["processed_count"] == 0
+    assert device_info == {}
+    assert conversation_data == {}
 
 
 def test_slot_backed_hot_records_behave_like_mappings() -> None:

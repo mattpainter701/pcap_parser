@@ -394,6 +394,19 @@ def get_vendor(mac: str) -> str | None:
     """Return vendor based on MAC OUI."""
     return _lookup_vendor_by_oui(_mac_to_oui(mac))
 
+
+
+def _populate_device_vendors(device_info: dict[str, DeviceSummary]) -> None:
+    """Populate missing vendor names once per device after packet aggregation."""
+    vendor_by_oui: dict[str | None, str | None] = {}
+    for mac, info in device_info.items():
+        if info.vendor is not None:
+            continue
+        oui = _mac_to_oui(mac)
+        if oui not in vendor_by_oui:
+            vendor_by_oui[oui] = _lookup_vendor_by_oui(oui)
+        info.vendor = vendor_by_oui[oui]
+
 def is_valid_mac(mac: str) -> bool:
     """Check if MAC address is valid and not broadcast/multicast."""
     if not mac:
@@ -438,7 +451,7 @@ def extract_device_info(pcap_file, debug=False, collect_metrics=False):
     print(f"\n[+] Loading capture file: {pcap_file}")
     
     try:
-        capture = pyshark.FileCapture(pcap_file)
+        capture = pyshark.FileCapture(pcap_file, keep_packets=False, use_json=True)
     except Exception as e:
         print(f"[!] Error opening capture file: {e}")
         print("[!] Make sure the file exists and is a valid PCAP file")
@@ -457,6 +470,12 @@ def extract_device_info(pcap_file, debug=False, collect_metrics=False):
         for pkt in capture:
             packet_count += 1
             try:
+                transport_protocol = pkt.transport_layer if hasattr(pkt, 'transport_layer') else None
+                if transport_protocol not in {"TCP", "UDP"}:
+                    if debug:
+                        print(f"[DEBUG] Packet #{packet_count} - Skipping unsupported transport: {transport_protocol}")
+                    continue
+
                 pkt_time = float(pkt.sniff_time.timestamp()) if hasattr(pkt, 'sniff_time') else 0
                 
                 # Extract IP addresses with IPv6 support
@@ -501,8 +520,7 @@ def extract_device_info(pcap_file, debug=False, collect_metrics=False):
                 # Get frame length for byte counts
                 frame_length = int(pkt.length) if hasattr(pkt, 'length') else 0
                 
-                # Extract protocols
-                transport_protocol = pkt.transport_layer if hasattr(pkt, 'transport_layer') else None
+                # Extract application protocol after non-TCP/UDP packets have been filtered.
                 app_protocol = pkt.highest_layer if hasattr(pkt, 'highest_layer') else None
                 
                 if debug:
@@ -567,117 +585,107 @@ def extract_device_info(pcap_file, debug=False, collect_metrics=False):
                 conv = conversation_data[conv_key]
                 
                 # Set initial values if this is the first packet in the conversation
-                if conv['source_ip'] is None:
-                    conv['source_ip'] = src_ip if is_forward else dst_ip
-                    conv['source_mac'] = src_mac if is_forward else dst_mac
-                    conv['target_ip'] = dst_ip if is_forward else src_ip
-                    conv['target_mac'] = dst_mac if is_forward else src_mac
-                    conv['protocol'] = transport_protocol
-                    conv['app_protocol'] = app_protocol
-                    conv['stream_id'] = stream_id
-                    conv['vlan_id'] = vlan_id
-                    conv['dsfield'] = dsfield
-                    conv['ip_version'] = ip_version
+                if conv.source_ip is None:
+                    conv.source_ip = src_ip if is_forward else dst_ip
+                    conv.source_mac = src_mac if is_forward else dst_mac
+                    conv.target_ip = dst_ip if is_forward else src_ip
+                    conv.target_mac = dst_mac if is_forward else src_mac
+                    conv.protocol = transport_protocol
+                    conv.app_protocol = app_protocol
+                    conv.stream_id = stream_id
+                    conv.vlan_id = vlan_id
+                    conv.dsfield = dsfield
+                    conv.ip_version = ip_version
                     
                     # Set port information according to protocol
                     if transport_protocol == 'TCP':
-                        conv['source_tcp_port'] = src_tcp_port if is_forward else dst_tcp_port
-                        conv['target_tcp_port'] = dst_tcp_port if is_forward else src_tcp_port
+                        conv.source_tcp_port = src_tcp_port if is_forward else dst_tcp_port
+                        conv.target_tcp_port = dst_tcp_port if is_forward else src_tcp_port
                     elif transport_protocol == 'UDP':
-                        conv['source_udp_port'] = src_udp_port if is_forward else dst_udp_port
-                        conv['target_udp_port'] = dst_udp_port if is_forward else src_udp_port
+                        conv.source_udp_port = src_udp_port if is_forward else dst_udp_port
+                        conv.target_udp_port = dst_udp_port if is_forward else src_udp_port
                 
                 # Update timestamps
-                if conv['first_seen'] is None or pkt_time < conv['first_seen']:
-                    conv['first_seen'] = pkt_time
-                if conv['last_seen'] is None or pkt_time > conv['last_seen']:
-                    conv['last_seen'] = pkt_time
+                if conv.first_seen is None or pkt_time < conv.first_seen:
+                    conv.first_seen = pkt_time
+                if conv.last_seen is None or pkt_time > conv.last_seen:
+                    conv.last_seen = pkt_time
                 
                 # Update frame protocols
                 if frame_protocols:
-                    conv['frame_protocols'].add(frame_protocols)
+                    conv.frame_protocols.add(frame_protocols)
                 
                 # Update TCP flags
-                conv['tcp_flags'].update(tcp_flags)
+                conv.tcp_flags.update(tcp_flags)
                 
                 # Update packet and byte counts based on direction
                 # For A→B direction (original direction from key creation)
-                if (is_forward and src_ip == conv['source_ip']) or (not is_forward and dst_ip == conv['source_ip']):
-                    conv['packets_a_to_b'] += 1
-                    conv['bytes_a_to_b'] += frame_length
+                if (is_forward and src_ip == conv.source_ip) or (not is_forward and dst_ip == conv.source_ip):
+                    conv.packets_a_to_b += 1
+                    conv.bytes_a_to_b += frame_length
                 # For B→A direction
                 else:
-                    conv['packets_b_to_a'] += 1
-                    conv['bytes_b_to_a'] += frame_length
+                    conv.packets_b_to_a += 1
+                    conv.bytes_b_to_a += frame_length
                 
                 # Update conversation status based on TCP flags or packet counts
                 if transport_protocol == 'TCP':
-                    if 'RST' in conv['tcp_flags']:
-                        conv['conversation_status'] = 'request-rejected'
-                    elif 'SYN' in conv['tcp_flags'] and 'ACK' in conv['tcp_flags']:
-                        if conv['packets_b_to_a'] > 0:
-                            conv['conversation_status'] = 'request-accepted'
+                    if 'RST' in conv.tcp_flags:
+                        conv.conversation_status = 'request-rejected'
+                    elif 'SYN' in conv.tcp_flags and 'ACK' in conv.tcp_flags:
+                        if conv.packets_b_to_a > 0:
+                            conv.conversation_status = 'request-accepted'
                         else:
-                            conv['conversation_status'] = 'request-rejected'
-                    elif 'SYN' in conv['tcp_flags'] and conv['packets_b_to_a'] == 0:
-                        conv['conversation_status'] = 'no-response'
-                    elif conv['packets_b_to_a'] > 0:
-                        conv['conversation_status'] = 'response'
+                            conv.conversation_status = 'request-rejected'
+                    elif 'SYN' in conv.tcp_flags and conv.packets_b_to_a == 0:
+                        conv.conversation_status = 'no-response'
+                    elif conv.packets_b_to_a > 0:
+                        conv.conversation_status = 'response'
                 else:
                     # For non-TCP protocols, use simple heuristic based on return traffic
-                    if conv['packets_b_to_a'] > 0:
-                        conv['conversation_status'] = 'response'
+                    if conv.packets_b_to_a > 0:
+                        conv.conversation_status = 'response'
                     else:
-                        conv['conversation_status'] = 'no-response'
+                        conv.conversation_status = 'no-response'
                 
-                # Update the original device_info structure as well for backward compatibility
-                # Process source device
+                # Update device summaries after conversation aggregation. Vendor
+                # attribution is intentionally batched after the packet loop so the
+                # hot path only mutates counters and sets.
                 record = device_info[src_mac]
-                if record['vendor'] is None:
-                    record['vendor'] = get_vendor(src_mac)
-                
-                if record['first_seen'] is None or pkt_time < record['first_seen']:
-                    record['first_seen'] = pkt_time
-                if record['last_seen'] is None or pkt_time > record['last_seen']:
-                    record['last_seen'] = pkt_time
-                record['packet_count'] += 1
-                
-                if src_ip:
-                    ip_record = record['ip_connections'][src_ip]
-                    if ip_record['first_seen'] is None or pkt_time < ip_record['first_seen']:
-                        ip_record['first_seen'] = pkt_time
-                    if ip_record['last_seen'] is None or pkt_time > ip_record['last_seen']:
-                        ip_record['last_seen'] = pkt_time
-                    ip_record['packet_count'] += 1
-                    
-                    if src_tcp_port:
-                        ip_record['tcp_ports'].add(src_tcp_port)
-                    if src_udp_port:
-                        ip_record['udp_ports'].add(src_udp_port)
-                
-                # Process destination device
+                if record.first_seen is None or pkt_time < record.first_seen:
+                    record.first_seen = pkt_time
+                if record.last_seen is None or pkt_time > record.last_seen:
+                    record.last_seen = pkt_time
+                record.packet_count += 1
+
+                ip_record = record.ip_connections[src_ip]
+                if ip_record.first_seen is None or pkt_time < ip_record.first_seen:
+                    ip_record.first_seen = pkt_time
+                if ip_record.last_seen is None or pkt_time > ip_record.last_seen:
+                    ip_record.last_seen = pkt_time
+                ip_record.packet_count += 1
+                if src_tcp_port:
+                    ip_record.tcp_ports.add(src_tcp_port)
+                if src_udp_port:
+                    ip_record.udp_ports.add(src_udp_port)
+
                 record = device_info[dst_mac]
-                if record['vendor'] is None:
-                    record['vendor'] = get_vendor(dst_mac)
-                
-                if record['first_seen'] is None or pkt_time < record['first_seen']:
-                    record['first_seen'] = pkt_time
-                if record['last_seen'] is None or pkt_time > record['last_seen']:
-                    record['last_seen'] = pkt_time
-                record['packet_count'] += 1
-                
-                if dst_ip:
-                    ip_record = record['ip_connections'][dst_ip]
-                    if ip_record['first_seen'] is None or pkt_time < ip_record['first_seen']:
-                        ip_record['first_seen'] = pkt_time
-                    if ip_record['last_seen'] is None or pkt_time > ip_record['last_seen']:
-                        ip_record['last_seen'] = pkt_time
-                    ip_record['packet_count'] += 1
-                    
-                    if dst_tcp_port:
-                        ip_record['tcp_ports'].add(dst_tcp_port)
-                    if dst_udp_port:
-                        ip_record['udp_ports'].add(dst_udp_port)
+                if record.first_seen is None or pkt_time < record.first_seen:
+                    record.first_seen = pkt_time
+                if record.last_seen is None or pkt_time > record.last_seen:
+                    record.last_seen = pkt_time
+                record.packet_count += 1
+
+                ip_record = record.ip_connections[dst_ip]
+                if ip_record.first_seen is None or pkt_time < ip_record.first_seen:
+                    ip_record.first_seen = pkt_time
+                if ip_record.last_seen is None or pkt_time > ip_record.last_seen:
+                    ip_record.last_seen = pkt_time
+                ip_record.packet_count += 1
+                if dst_tcp_port:
+                    ip_record.tcp_ports.add(dst_tcp_port)
+                if dst_udp_port:
+                    ip_record.udp_ports.add(dst_udp_port)
                 
                 processed_count += 1
                 
@@ -693,10 +701,12 @@ def extract_device_info(pcap_file, debug=False, collect_metrics=False):
     finally:
         capture.close()
     
+    _populate_device_vendors(device_info)
+
     # Calculate durations for all conversations
-    for conv_key, conv in conversation_data.items():
-        if conv['first_seen'] is not None and conv['last_seen'] is not None:
-            conv['duration'] = conv['last_seen'] - conv['first_seen']
+    for conv in conversation_data.values():
+        if conv.first_seen is not None and conv.last_seen is not None:
+            conv.duration = conv.last_seen - conv.first_seen
     
     print(f"[+] Processed {processed_count} of {packet_count} packets")
     print(f"[+] Found {len(conversation_data)} unique conversations")
@@ -1285,3 +1295,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
