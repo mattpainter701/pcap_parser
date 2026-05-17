@@ -1,0 +1,45 @@
+# pcap-parser bash completion — Sprint 12
+# Install: source pcap-parser.bash-completion
+#   or copy to /etc/bash_completion.d/pcap-parser
+
+_pcap_parser() {
+    local cur prev opts
+    COMPREPLY=()
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+
+    # Static options
+    local basic_opts="--debug --download-instructions --output --output-dir --format --validate-output --regression --regression-manifest --regression-actual-dir --benchmark --benchmark-output --stats-only --filter --compare --analyze --summary --roles --anomalies --timeline --analysis-json --geoip-db --geoip-locations --analysis-bucket --slice-start --slice-end --slice-src --slice-dst --slice-proto --slice-port --stream-json --stream-ndjson"
+
+    local format_opts="csv json both"
+
+    # Complete options
+    case "${prev}" in
+        --format)
+            COMPREPLY=( $(compgen -W "${format_opts}" -- "${cur}") )
+            return 0
+            ;;
+        --output|--output-dir|--benchmark-output|--analysis-json|--geoip-db|--geoip-locations|--regression-manifest|--regression-actual-dir)
+            # File path completion
+            COMPREPLY=( $(compgen -f -- "${cur}") )
+            return 0
+            ;;
+        --analysis-bucket)
+            # Numeric value, no completion
+            return 0
+            ;;
+        *)
+            ;;
+    esac
+
+    # Complete options or PCAP files
+    if [[ ${cur} == -* ]] ; then
+        COMPREPLY=( $(compgen -W "${basic_opts}" -- "${cur}") )
+    else
+        # Complete with .pcap/.pcapng files
+        COMPREPLY=( $(compgen -f -X '!*.@(pcap|pcapng|cap)' -- "${cur}") )
+    fi
+    return 0
+}
+complete -F _pcap_parser pcap-parser
+complete -F _pcap_parser python

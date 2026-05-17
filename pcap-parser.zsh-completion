@@ -1,0 +1,50 @@
+#compdef pcap-parser
+
+# pcap-parser zsh completion — Sprint 12
+# Install: cp pcap-parser.zsh-completion /usr/local/share/zsh/site-functions/_pcap-parser
+#   or source pcap-parser.zsh-completion
+
+_pcap_parser() {
+    local -a basic_opts
+    basic_opts=(
+        '--debug[Enable verbose per-packet debug logging]'
+        '--download-instructions[Show OUI database download instructions]'
+        '--output[Output base filename]:filename:_files'
+        '--output-dir[Directory for generated reports]:directory:_files -/'
+        '--format[Output format]:format:(csv json both)'
+        '--validate-output[Validate output against JSON Schema contracts]'
+        '--regression[Run golden regression suite and exit]'
+        '--regression-manifest[Path to regression manifest]:file:_files'
+        '--regression-actual-dir[Directory with regenerated outputs]:directory:_files -/'
+        '--benchmark[Profile parsing performance]'
+        '--benchmark-output[Benchmark JSON output path]:file:_files'
+        '--stats-only[Print summary statistics only]'
+        '--filter[Wireshark display filter expression]:filter:'
+        '--compare[Diff two captures]'
+        '--analyze[Run all advanced analysis]'
+        '--summary[Print executive summary]'
+        '--roles[Print device role inference]'
+        '--anomalies[Detect traffic anomalies]'
+        '--timeline[Print conversation timeline]'
+        '--analysis-json[Write analysis to JSON file]:file:_files'
+        '--geoip-db[MaxMind GeoLite2-City.mmdb path]:file:_files'
+        '--geoip-locations[MaxMind GeoLite2 locations CSV path]:file:_files'
+        '--analysis-bucket[Timeline bucket seconds]:seconds:'
+        '--slice-start[Start time unix timestamp]:timestamp:'
+        '--slice-end[End time unix timestamp]:timestamp:'
+        '--slice-src[Source IP filter]:ip:'
+        '--slice-dst[Destination IP filter]:ip:'
+        '--slice-proto[Protocol filter]:protocol:(TCP UDP)'
+        '--slice-port[Port filter]:port:'
+        '--stream-json[Stream NDJSON to stdout]'
+        '--stream-ndjson[Alias for --stream-json]'
+    )
+
+    _arguments -s -S \
+        '1:PCAP file:_files -g "*.pcap *.pcapng *.cap(-.)"' \
+        '2:Second PCAP file (for --compare):_files -g "*.pcap *.pcapng *.cap(-.)"' \
+        $basic_opts \
+        '*:directory:_files -/'
+}
+
+_pcap_parser "$@"

@@ -1,0 +1,60 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pcap-parser"
+version = "1.0.0"
+description = "Fast, reliable network capture analysis — extract devices, conversations, and structured reports from PCAP/PCAPNG files"
+readme = "readme.md"
+license = {text = "MIT"}
+authors = [
+    {name = "Matt Painter", email = "matt@painter.sh"}
+]
+keywords = ["pcap", "pcapng", "network", "analysis", "forensics", "packet-capture"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: System Administrators",
+    "Intended Audience :: Information Technology",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: System :: Networking :: Monitoring",
+    "Topic :: Utilities",
+]
+requires-python = ">=3.10"
+dependencies = [
+    "pyshark>=0.6.0",
+    "jsonschema>=4.0.0",
+    "tqdm>=4.64.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+]
+visualizer = [
+    "flask>=2.3",
+]
+
+[project.urls]
+Homepage = "https://github.com/mattpainter701/pcap_parser"
+Repository = "https://github.com/mattpainter701/pcap_parser"
+Issues = "https://github.com/mattpainter701/pcap_parser/issues"
+
+[project.scripts]
+pcap-parser = "pcap_parser:main"
+
+[tool.setuptools]
+py-modules = ["pcap_parser", "pcap_analysis", "pcap_regression"]
+
+[tool.setuptools.package-data]
+pcap_visualizer = ["static/**", "templates/**", "d3samples/**"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]

@@ -1,0 +1,11 @@
+# Ignore large data files in Docker context
+oui.txt
+oui.csv
+*.pcap
+*.pcapng
+*.cap
+outputs/
+__pycache__/
+.pytest_cache/
+*.pyc
+.DS_Store

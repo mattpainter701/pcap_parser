@@ -1926,6 +1926,282 @@ def _print_timeline(timeline: list) -> None:
         print(f"  {label}  {bar}  {pkts:>6d} pkts  {active:>4d} convs")
 
 
+class DeviceRecord:
+    """Public device record for library consumers."""
+    mac: str
+    vendor: str | None
+    ips: list[str]
+    tcp_ports: list[int]
+    udp_ports: list[int]
+    packet_count: int
+    first_seen: float | None
+    last_seen: float | None
+
+    def to_dict(self) -> dict:
+        return {
+            "mac": self.mac,
+            "vendor": self.vendor or "Unknown",
+            "ips": self.ips,
+            "tcp_ports": sorted(self.tcp_ports),
+            "udp_ports": sorted(self.udp_ports),
+            "packet_count": self.packet_count,
+            "first_seen": self.first_seen,
+            "last_seen": self.last_seen,
+        }
+
+
+@dataclass(slots=True)
+class ConversationRecord:
+    """Public conversation record for library consumers."""
+    source_ip: str | None
+    source_mac: str | None
+    source_tcp_port: int | None
+    source_udp_port: int | None
+    target_ip: str | None
+    target_mac: str | None
+    target_tcp_port: int | None
+    target_udp_port: int | None
+    protocol: str | None
+    app_protocol: str | None
+    packets_a_to_b: int
+    packets_b_to_a: int
+    bytes_a_to_b: int
+    bytes_b_to_a: int
+    first_seen: float | None
+    last_seen: float | None
+    duration: float
+    conversation_status: str
+    tcp_flags: list[str]
+    stream_id: str | None
+    frame_protocols: list[str]
+    vlan_id: str | None
+    dsfield: str | None
+    ip_version: int | None
+
+    def to_dict(self) -> dict:
+        return {
+            "source_ip": self.source_ip,
+            "source_mac": self.source_mac,
+            "source_tcp_port": self.source_tcp_port,
+            "source_udp_port": self.source_udp_port,
+            "target_ip": self.target_ip,
+            "target_mac": self.target_mac,
+            "target_tcp_port": self.target_tcp_port,
+            "target_udp_port": self.target_udp_port,
+            "protocol": self.protocol,
+            "app_protocol": self.app_protocol,
+            "packets_a_to_b": self.packets_a_to_b,
+            "packets_b_to_a": self.packets_b_to_a,
+            "bytes_a_to_b": self.bytes_a_to_b,
+            "bytes_b_to_a": self.bytes_b_to_a,
+            "first_seen": self.first_seen,
+            "last_seen": self.last_seen,
+            "duration": self.duration,
+            "conversation_status": self.conversation_status,
+            "tcp_flags": sorted(self.tcp_flags),
+            "stream_id": self.stream_id,
+            "frame_protocols": sorted(self.frame_protocols),
+            "vlan_id": self.vlan_id,
+            "dsfield": self.dsfield,
+            "ip_version": self.ip_version,
+        }
+
+
+@dataclass(slots=True)
+class ParsedData:
+    """Structured result from parsing a capture file."""
+    pcap_file: str
+    devices: list[DeviceRecord]
+    conversations: list[ConversationRecord]
+    elapsed_seconds: float
+    device_count: int
+    conversation_count: int
+    total_packets: int
+    total_bytes: int
+    protocols_detected: list[str]
+
+    def to_dict(self) -> dict:
+        return {
+            "pcap_file": self.pcap_file,
+            "devices": [d.to_dict() for d in self.devices],
+            "conversations": [c.to_dict() for c in self.conversations],
+            "elapsed_seconds": self.elapsed_seconds,
+            "device_count": self.device_count,
+            "conversation_count": self.conversation_count,
+            "total_packets": self.total_packets,
+            "total_bytes": self.total_bytes,
+            "protocols_detected": self.protocols_detected,
+        }
+
+
+def _device_info_to_records(device_info: dict[str, DeviceSummary]) -> list[DeviceRecord]:
+    """Convert internal DeviceSummary dict to public DeviceRecord list."""
+    records = []
+    for mac, info in device_info.items():
+        ips = []
+        tcp_all: set[int] = set()
+        udp_all: set[int] = set()
+        for ip, ip_info in info.ip_connections.items():
+            ips.append(ip)
+            tcp_all.update(ip_info.tcp_ports)
+            udp_all.update(ip_info.udp_ports)
+        records.append(DeviceRecord(
+            mac=mac,
+            vendor=info.vendor,
+            ips=sorted(ips),
+            tcp_ports=sorted(tcp_all),
+            udp_ports=sorted(udp_all),
+            packet_count=info.packet_count,
+            first_seen=info.first_seen,
+            last_seen=info.last_seen,
+        ))
+    return records
+
+
+def _conversation_data_to_records(conversation_data: dict) -> list[ConversationRecord]:
+    """Convert internal ConversationSummary dict to public ConversationRecord list."""
+    records = []
+    for conv in conversation_data.values():
+        records.append(ConversationRecord(
+            source_ip=conv.source_ip,
+            source_mac=conv.source_mac,
+            source_tcp_port=conv.source_tcp_port,
+            source_udp_port=conv.source_udp_port,
+            target_ip=conv.target_ip,
+            target_mac=conv.target_mac,
+            target_tcp_port=conv.target_tcp_port,
+            target_udp_port=conv.target_udp_port,
+            protocol=conv.protocol,
+            app_protocol=conv.app_protocol,
+            packets_a_to_b=conv.packets_a_to_b,
+            packets_b_to_a=conv.packets_b_to_a,
+            bytes_a_to_b=conv.bytes_a_to_b,
+            bytes_b_to_a=conv.bytes_b_to_a,
+            first_seen=conv.first_seen,
+            last_seen=conv.last_seen,
+            duration=conv.duration,
+            conversation_status=conv.conversation_status,
+            tcp_flags=sorted(conv.tcp_flags),
+            stream_id=conv.stream_id,
+            frame_protocols=sorted(conv.frame_protocols),
+            vlan_id=conv.vlan_id,
+            dsfield=conv.dsfield,
+            ip_version=conv.ip_version,
+        ))
+    return records
+
+
+def _count_parsed_packets(device_info: dict[str, DeviceSummary], conversation_data: dict) -> tuple[int, int, set[str]]:
+    """Count total packets, bytes, and protocols from parsed data."""
+    total_packets = 0
+    total_bytes = 0
+    protocols: set[str] = set()
+    for dev in device_info.values():
+        total_packets += dev.packet_count
+        # Sum per-IP packet counts (approximation via device totals)
+    for conv in conversation_data.values():
+        total_bytes += conv.bytes_a_to_b + conv.bytes_b_to_a
+        if conv.protocol:
+            protocols.add(conv.protocol)
+    return total_packets, total_bytes, protocols
+
+
+def parse_capture(
+    pcap_path: str | Path,
+    *,
+    debug: bool = False,
+    bpf_filter: str | None = None,
+) -> ParsedData:
+    """Parse a PCAP/PCAPNG file and return structured data.
+
+    This is the primary library entry point. No files are written to disk —
+    all results are returned in memory.
+
+    Args:
+        pcap_path: Path to a .pcap or .pcapng file.
+        debug: Enable verbose per-packet debug logging.
+        bpf_filter: Optional Wireshark/tshark display filter expression.
+
+    Returns:
+        ParsedData with device records, conversation records, and summary stats.
+
+    Raises:
+        FileNotFoundError: If the pcap file does not exist.
+        RuntimeError: If tshark is not installed or parsing fails.
+    """
+    pcap_path = Path(pcap_path).expanduser()
+    if not pcap_path.exists():
+        raise FileNotFoundError(f"PCAP file not found: {pcap_path}")
+
+    start = time.time()
+    result = extract_device_info(str(pcap_path), debug=debug, bpf_filter=bpf_filter)
+    elapsed = time.time() - start
+
+    if not result:
+        raise RuntimeError(f"Failed to extract data from: {pcap_path}")
+
+    device_info, conversation_data = result
+    _populate_device_vendors(device_info)
+
+    devices = _device_info_to_records(device_info)
+    conversations = _conversation_data_to_records(conversation_data)
+    total_packets, total_bytes, protocols = _count_parsed_packets(device_info, conversation_data)
+
+    return ParsedData(
+        pcap_file=str(pcap_path),
+        devices=devices,
+        conversations=conversations,
+        elapsed_seconds=elapsed,
+        device_count=len(devices),
+        conversation_count=len(conversations),
+        total_packets=total_packets,
+        total_bytes=total_bytes,
+        protocols_detected=sorted(protocols),
+    )
+
+
+def parse_capture_streaming(
+    pcap_path: str | Path,
+    *,
+    debug: bool = False,
+    bpf_filter: str | None = None,
+    chunk_size: int = 100,
+) -> Iterable[dict]:
+    """Parse a PCAP/PCAPNG file and yield JSON-serializable records as they're processed.
+
+    This is a streaming (generator) API. Each yielded dict represents one device
+    or conversation record, tagged with a ``type`` field. Consumers can write
+    these as newline-delimited JSON (NDJSON) for incremental processing.
+
+    Args:
+        pcap_path: Path to a .pcap or .pcapng file.
+        debug: Enable verbose per-packet debug logging.
+        bpf_filter: Optional Wireshark/tshark display filter expression.
+        chunk_size: Yield metadata after this many records (unused in Python impl,
+                    but reserved for future Rust streaming backend).
+
+    Yields:
+        dict records with ``type`` in {"device", "conversation", "summary"}.
+    """
+    data = parse_capture(pcap_path, debug=debug, bpf_filter=bpf_filter)
+
+    for device in data.devices:
+        yield {"type": "device", **device.to_dict()}
+
+    for conv in data.conversations:
+        yield {"type": "conversation", **conv.to_dict()}
+
+    yield {
+        "type": "summary",
+        "pcap_file": data.pcap_file,
+        "elapsed_seconds": data.elapsed_seconds,
+        "device_count": data.device_count,
+        "conversation_count": data.conversation_count,
+        "total_packets": data.total_packets,
+        "total_bytes": data.total_bytes,
+        "protocols_detected": data.protocols_detected,
+    }
+
 def main():
     parser = argparse.ArgumentParser(
         description="PCAP Network Capture Analyzer — extract device inventories, "
@@ -2018,6 +2294,10 @@ See SPEC.md for the full sprint roadmap.
                         help="Slice: protocol filter (TCP, UDP)")
     parser.add_argument("--slice-port", type=int,
                         help="Slice: port filter")
+    parser.add_argument("--stream-json", action="store_true",
+                        help="Stream NDJSON output to stdout (one JSON object per line)")
+    parser.add_argument("--stream-ndjson", action="store_true",
+                        help="Alias for --stream-json")
     args = parser.parse_args()
 
     if args.download_instructions:
@@ -2073,6 +2353,24 @@ See SPEC.md for the full sprint roadmap.
             print("[-] Benchmark mode currently accepts a single capture file, not a directory.")
             return
         print(f"[+] Found {len(capture_files)} capture file(s) in directory: {input_path}")
+
+    # --stream-json / --stream-ndjson: write NDJSON to stdout and exit
+    if args.stream_json or args.stream_ndjson:
+        if input_path.is_dir():
+            print("[-] --stream-json does not support directory inputs. Point to a single PCAP file.")
+            return
+        try:
+            count = 0
+            for record in parse_capture_streaming(str(input_path), debug=args.debug, bpf_filter=args.filter):
+                json.dump(record, sys.stdout)
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+                count += 1
+            print(f"\n[+] Streamed {count} records to stdout", file=sys.stderr)
+        except Exception as e:
+            print(f"[-] Streaming failed: {e}", file=sys.stderr)
+            sys.exit(1)
+        return
 
     for capture_file in capture_files:
         base_output = _build_output_base(capture_file, args.output if input_path.is_dir() else None)

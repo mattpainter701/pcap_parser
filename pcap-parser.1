@@ -1,0 +1,242 @@
+.\" Man page for pcap-parser(1)
+.\" Generated 2026-05-16 — Sprint 12 Distribution & Ship Readiness
+.TH PCAP\-PARSER 1 "May 2026" "pcap-parser 1.0.0" "User Commands"
+.SH NAME
+pcap\-parser \- network capture analyzer — extract devices, conversations, and structured reports from PCAP/PCAPNG files
+.SH SYNOPSIS
+.B pcap\-parser
+[\fIOPTIONS\fR] \fIPCAP_FILE\fR
+.br
+.B pcap\-parser
+[\fIOPTIONS\fR] \fIDIRECTORY\fR
+.br
+.B pcap\-parser
+\fB\-\-regression\fR
+.br
+.B pcap\-parser
+\fB\-\-download\-instructions\fR
+.br
+.B pcap\-parser
+\fIbefore.pcap\fR \fIafter.pcap\fR \fB\-\-compare\fR
+.br
+.B python \-m pcap_parser
+[\fIOPTIONS\fR] \fIPCAP_FILE\fR
+.SH DESCRIPTION
+.B pcap\-parser
+reads PCAP or PCAPNG capture files and produces structured reports including:
+.IP \(bu 4
+Device inventory: MAC addresses, vendor names (IEEE OUI), IP addresses, TCP/UDP ports, packet counts.
+.IP \(bu 4
+Conversation analysis: bidirectional flow tracking, byte/packet counts, TCP flag detection,
+application protocol inference, and connection status classification.
+.IP \(bu 4
+Advanced analysis (Sprint 10): device role inference, network segmentation, topology graphs,
+traffic anomaly detection, and timeline visualization.
+.PP
+Output formats include CSV, JSON (D3-visualization-ready), and streaming newline-delimited JSON (NDJSON).
+.SH OPTIONS
+.SS "Basic Options"
+.TP
+\fBPCAP_FILE\fR
+Path to a .pcap or .pcapng file, or a directory containing capture files.
+.TP
+\fB\-\-output\fR \fINAME\fR
+Output base filename (default: derived from pcap file name).
+.TP
+\fB\-\-output\-dir\fR \fIDIR\fR
+Directory for generated reports (default: \fBoutputs\fR).
+.TP
+\fB\-\-format\fR \fIFMT\fR
+Output format: \fBcsv\fR, \fBjson\fR, or \fBboth\fR (default: \fBboth\fR).
+.TP
+\fB\-\-debug\fR
+Enable verbose per-packet debug logging.
+.SS "Streaming Output"
+.TP
+\fB\-\-stream\-json\fR, \fB\-\-stream\-ndjson\fR
+Write newline-delimited JSON (NDJSON) records to stdout instead of files.
+Each line is a self-contained JSON object with a \fBtype\fR field:
+\fBdevice\fR, \fBconversation\fR, or \fBsummary\fR.
+Useful for piping into \fBjq\fR, \fBduckdb\fR, or other streaming consumers.
+.SS "Filtering & Comparison"
+.TP
+\fB\-\-filter\fR \fIEXPR\fR
+Wireshark/tshark display filter expression (e.g. \(aq\fBtcp.port==443\fR\(aq).
+.TP
+\fB\-\-compare\fR
+Diff two captures: \fBpcap\-parser before.pcap after.pcap \-\-compare\fR.
+.TP
+\fB\-\-stats\-only\fR
+Print summary statistics only \(em no output files written.
+.SS "Validation & Regression"
+.TP
+\fB\-\-validate\-output\fR
+Validate generated output files against JSON Schema contracts.
+.TP
+\fB\-\-regression\fR
+Run the committed golden regression suite and exit.
+.TP
+\fB\-\-regression\-manifest\fR \fIPATH\fR
+Path to regression fixture manifest (default: \fBfixtures/regression_manifest.json\fR).
+.TP
+\fB\-\-regression\-actual\-dir\fR \fIDIR\fR
+Directory with regenerated outputs to compare against golden fixtures.
+.SS "Performance"
+.TP
+\fB\-\-benchmark\fR
+Profile parsing and write a performance benchmark report.
+.TP
+\fB\-\-benchmark\-output\fR \fIPATH\fR
+Path for benchmark JSON output (default: \fBoutputs/<base>\-benchmark.json\fR).
+.SS "Advanced Analysis (Sprint 10)"
+.TP
+\fB\-\-analyze\fR
+Run all advanced analysis: roles, segments, topology, anomalies, timeline.
+.TP
+\fB\-\-summary\fR
+Print executive summary report after parsing.
+.TP
+\fB\-\-roles\fR
+Print inferred device roles (router, server, workstation, IoT, etc.).
+.TP
+\fB\-\-anomalies\fR
+Detect and print traffic anomalies.
+.TP
+\fB\-\-timeline\fR
+Print conversation activity timeline.
+.TP
+\fB\-\-analysis\-json\fR \fIPATH\fR
+Write full analysis results to JSON file.
+.TP
+\fB\-\-geoip\-db\fR \fIPATH\fR
+Path to MaxMind GeoLite2-City.mmdb for GeoIP enrichment.
+.TP
+\fB\-\-analysis\-bucket\fR \fISEC\fR
+Timeline bucket size in seconds (default: 60).
+.SS "Time Slicing"
+.TP
+\fB\-\-slice\-start\fR \fITS\fR
+Slice: start time (unix timestamp).
+.TP
+\fB\-\-slice\-end\fR \fITS\fR
+Slice: end time (unix timestamp).
+.TP
+\fB\-\-slice\-src\fR \fIIP\fR
+Slice: source IP filter.
+.TP
+\fB\-\-slice\-dst\fR \fIIP\fR
+Slice: destination IP filter.
+.TP
+\fB\-\-slice\-proto\fR \fIPROTO\fR
+Slice: protocol filter (TCP, UDP).
+.TP
+\fB\-\-slice\-port\fR \fIPORT\fR
+Slice: port filter.
+.SS "Other"
+.TP
+\fB\-\-download\-instructions\fR
+Show instructions for downloading the IEEE OUI database.
+.SH EXAMPLES
+.TP
+Parse a single capture and write CSV+JSON reports:
+.RS
+pcap\-parser capture.pcapng
+.RE
+.TP
+Stream NDJSON output for pipeline processing:
+.RS
+pcap\-parser large.pcap \-\-stream\-json | jq \(aqselect(.type == "device")\(aq
+.RE
+.TP
+Process all PCAPs in a directory:
+.RS
+pcap\-parser ./captures/ \-\-output myaudit
+.RE
+.TP
+Quick statistics without writing files:
+.RS
+pcap\-parser large_capture.pcap \-\-stats\-only
+.RE
+.TP
+Filter packets to TCP port 443 only:
+.RS
+pcap\-parser capture.pcap \-\-filter "tcp.port==443"
+.RE
+.TP
+Diff two captures:
+.RS
+pcap\-parser before.pcap after.pcap \-\-compare
+.RE
+.TP
+Profile performance:
+.RS
+pcap\-parser capture.pcapng \-\-benchmark
+.RE
+.TP
+Advanced analysis with GeoIP:
+.RS
+pcap\-parser capture.pcapng \-\-analyze \-\-geoip\-db GeoLite2\-City.mmdb
+.RE
+.SH FILES
+.TP
+.I oui.txt
+IEEE OUI database (MAC prefix to vendor mapping). Download from
+https://standards-oui.ieee.org/oui/oui.txt
+.TP
+.I oui.csv
+Cached OUI database in CSV format (auto-generated from oui.txt).
+.TP
+.I outputs/
+Default output directory for reports.
+.TP
+.I schemas/v1.0.0/
+JSON Schema contracts for output validation.
+.TP
+.I fixtures/regression_manifest.json
+Golden regression fixture manifest.
+.SH ENVIRONMENT
+.TP
+.B OUTPUT_DIR
+Override the default output directory (equivalent to \fB\-\-output\-dir\fR).
+.SH EXIT STATUS
+.TP
+0
+Success.
+.TP
+1
+Error (missing tshark, validation failure, regression failure, streaming failure).
+.SH LIBRARY USAGE
+The package can be imported as a Python module:
+.PP
+.RS 4
+from pcap_parser import parse_capture, parse_capture_streaming
+.PP
+# One-shot parse
+.br
+data = parse_capture("capture.pcapng")
+.br
+print(data.devices, data.conversations)
+.PP
+# Streaming
+.br
+for record in parse_capture_streaming("capture.pcapng"):
+.br
+    print(json.dumps(record))
+.RE
+.SH DEPENDENCIES
+.IP \(bu 4
+Python 3.10+
+.IP \(bu 4
+tshark (Wireshark CLI) \(em required for packet parsing
+.IP \(bu 4
+PyShark (Python wrapper for tshark)
+.IP \(bu 4
+jsonschema (optional, for output validation)
+.SH SEE ALSO
+.BR tshark (1),
+.BR wireshark (1),
+.BR jq (1)
+.PP
+Project repository: \fIhttps://github.com/mattpainter701/pcap_parser\fR
+.SH BUGS
+Report issues at \fIhttps://github.com/mattpainter701/pcap_parser/issues\fR
