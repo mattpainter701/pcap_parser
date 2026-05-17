@@ -269,6 +269,70 @@ def _normalize_protocol_name(value: str | None) -> str | None:
     return normalized or None
 
 
+def _safe_int(value: Any, default: int | None = None, *, base: int = 10) -> int | None:
+    """Convert pyshark field-like values to int without throwing on malformed packets."""
+
+    if value in (None, ""):
+        return default
+    try:
+        return int(str(value), base)
+    except (TypeError, ValueError):
+        return default
+
+
+def _has_packet_layer(packet: Any, layer_name: str) -> bool:
+    """Safely test for a pyshark layer, including partially decoded malformed packets."""
+
+    try:
+        return hasattr(packet, layer_name)
+    except Exception:
+        return False
+
+
+def _detect_application_protocol(
+    packet: Any,
+    *,
+    src_tcp_port: int | None = None,
+    dst_tcp_port: int | None = None,
+    src_udp_port: int | None = None,
+    dst_udp_port: int | None = None,
+    highest_layer: str | None = None,
+) -> str | None:
+    """Return a stable application protocol label for common dissectors.
+
+    PyShark's ``highest_layer`` can be generic (for example DATA) when a
+    capture is truncated, encrypted, or partially decoded.  This helper checks
+    known protocol layers first, then falls back to well-known ports so HTTP,
+    DNS, and TLS conversations stay consistently labelled in edge-case pcaps.
+    """
+
+    layer_preferences = [
+        ("http2", "HTTP2"),
+        ("http", "HTTP"),
+        ("dns", "DNS"),
+        ("tls", "TLS"),
+        ("ssl", "TLS"),
+        ("quic", "QUIC"),
+    ]
+    for layer_name, label in layer_preferences:
+        if _has_packet_layer(packet, layer_name):
+            return label
+
+    normalized_highest = _normalize_protocol_name(highest_layer)
+    if normalized_highest and normalized_highest not in {"DATA", "TCP", "UDP", "IP", "IPV6", "ETH"}:
+        return normalized_highest
+
+    tcp_ports = {port for port in (src_tcp_port, dst_tcp_port) if port is not None}
+    udp_ports = {port for port in (src_udp_port, dst_udp_port) if port is not None}
+    if 53 in udp_ports or 53 in tcp_ports:
+        return "DNS"
+    if tcp_ports & {80, 8080}:
+        return "HTTP"
+    if tcp_ports & {443, 8443} or udp_ports & {443, 8443}:
+        return "TLS"
+    return normalized_highest
+
+
 def interpret_diffserv_field(dsfield: str | int | None) -> str | None:
     """Return a compact human-readable DiffServ interpretation.
 
@@ -505,6 +569,10 @@ def extract_device_info(pcap_file, debug=False, collect_metrics=False, bpf_filte
 
     packet_count = 0
     processed_count = 0
+    malformed_count = 0
+    skipped_unsupported_transport = 0
+    skipped_missing_fields = 0
+    skipped_invalid_mac = 0
     
     # Try to get total packet estimate for progress bar
     total_estimate = None
@@ -524,6 +592,7 @@ def extract_device_info(pcap_file, debug=False, collect_metrics=False, bpf_filte
             try:
                 transport_protocol = pkt.transport_layer if hasattr(pkt, 'transport_layer') else None
                 if transport_protocol not in {"TCP", "UDP"}:
+                    skipped_unsupported_transport += 1
                     if debug:
                         print(f"[DEBUG] Packet #{packet_count} - Skipping unsupported transport: {transport_protocol}")
                     continue
@@ -559,26 +628,21 @@ def extract_device_info(pcap_file, debug=False, collect_metrics=False, bpf_filte
                 
                 # Skip if missing critical information
                 if not src_ip or not dst_ip or not src_mac or not dst_mac:
+                    skipped_missing_fields += 1
                     if debug:
                         print(f"[DEBUG] Packet #{packet_count} - Skipping, missing critical info: src_ip={src_ip}, dst_ip={dst_ip}, src_mac={src_mac}, dst_mac={dst_mac}")
                     continue
                 
                 # Skip invalid MAC addresses
                 if not is_valid_mac(src_mac) or not is_valid_mac(dst_mac):
+                    skipped_invalid_mac += 1
                     if debug:
                         print(f"[DEBUG] Packet #{packet_count} - Skipping, invalid MAC: src_mac={src_mac}, dst_mac={dst_mac}")
                     continue
                 
                 # Get frame length for byte counts
-                frame_length = int(pkt.length) if hasattr(pkt, 'length') else 0
-                
-                # Extract application protocol after non-TCP/UDP packets have been filtered.
-                app_protocol = pkt.highest_layer if hasattr(pkt, 'highest_layer') else None
-                
-                if debug:
-                    print(f"[DEBUG] Packet #{packet_count} - IP: {src_ip} -> {dst_ip}, Protocol: {transport_protocol}, App: {app_protocol}")
-                    if vlan_id:
-                        print(f"[DEBUG] Packet #{packet_count} - VLAN ID: {vlan_id}, DSField: {dsfield}")
+                frame_length = _safe_int(pkt.length if hasattr(pkt, 'length') else None, 0) or 0
+                highest_layer = pkt.highest_layer if hasattr(pkt, 'highest_layer') else None
                 
                 # Get frame protocols
                 frame_protocols = pkt.frame_info.protocols if hasattr(pkt, 'frame_info') and hasattr(pkt.frame_info, 'protocols') else ""
@@ -595,8 +659,13 @@ def extract_device_info(pcap_file, debug=False, collect_metrics=False, bpf_filte
                 
                 # TCP-specific information
                 if hasattr(pkt, 'tcp'):
-                    src_port = int(pkt.tcp.srcport)
-                    dst_port = int(pkt.tcp.dstport)
+                    src_port = _safe_int(pkt.tcp.srcport if hasattr(pkt.tcp, 'srcport') else None)
+                    dst_port = _safe_int(pkt.tcp.dstport if hasattr(pkt.tcp, 'dstport') else None)
+                    if src_port is None or dst_port is None:
+                        malformed_count += 1
+                        if debug:
+                            print(f"[DEBUG] Packet #{packet_count} - Skipping malformed TCP ports")
+                        continue
                     src_tcp_port = src_port
                     dst_tcp_port = dst_port
                     
@@ -606,21 +675,41 @@ def extract_device_info(pcap_file, debug=False, collect_metrics=False, bpf_filte
                     # Get TCP flags
                     if hasattr(pkt.tcp, 'flags'):
                         # Check for SYN, ACK, RST, FIN flags
-                        if hasattr(pkt.tcp.flags, 'syn') and int(pkt.tcp.flags.syn) == 1:
+                        if hasattr(pkt.tcp.flags, 'syn') and _safe_int(pkt.tcp.flags.syn) == 1:
                             tcp_flags.add('SYN')
-                        if hasattr(pkt.tcp.flags, 'ack') and int(pkt.tcp.flags.ack) == 1:
+                        if hasattr(pkt.tcp.flags, 'ack') and _safe_int(pkt.tcp.flags.ack) == 1:
                             tcp_flags.add('ACK')
-                        if hasattr(pkt.tcp.flags, 'reset') and int(pkt.tcp.flags.reset) == 1:
+                        if hasattr(pkt.tcp.flags, 'reset') and _safe_int(pkt.tcp.flags.reset) == 1:
                             tcp_flags.add('RST')
-                        if hasattr(pkt.tcp.flags, 'fin') and int(pkt.tcp.flags.fin) == 1:
+                        if hasattr(pkt.tcp.flags, 'fin') and _safe_int(pkt.tcp.flags.fin) == 1:
                             tcp_flags.add('FIN')
                 
                 # UDP-specific information
                 elif hasattr(pkt, 'udp'):
-                    src_port = int(pkt.udp.srcport)
-                    dst_port = int(pkt.udp.dstport)
+                    src_port = _safe_int(pkt.udp.srcport if hasattr(pkt.udp, 'srcport') else None)
+                    dst_port = _safe_int(pkt.udp.dstport if hasattr(pkt.udp, 'dstport') else None)
+                    if src_port is None or dst_port is None:
+                        malformed_count += 1
+                        if debug:
+                            print(f"[DEBUG] Packet #{packet_count} - Skipping malformed UDP ports")
+                        continue
                     src_udp_port = src_port
                     dst_udp_port = dst_port
+                
+                # Extract application protocol after transport ports have been normalized.
+                app_protocol = _detect_application_protocol(
+                    pkt,
+                    src_tcp_port=src_tcp_port,
+                    dst_tcp_port=dst_tcp_port,
+                    src_udp_port=src_udp_port,
+                    dst_udp_port=dst_udp_port,
+                    highest_layer=highest_layer,
+                )
+                
+                if debug:
+                    print(f"[DEBUG] Packet #{packet_count} - IP: {src_ip} -> {dst_ip}, Protocol: {transport_protocol}, App: {app_protocol}")
+                    if vlan_id:
+                        print(f"[DEBUG] Packet #{packet_count} - VLAN ID: {vlan_id}, DSField: {dsfield}")
                 
                 # Create a conversation key that works in both directions
                 # We need to know which way is A→B and which is B→A
@@ -744,6 +833,7 @@ def extract_device_info(pcap_file, debug=False, collect_metrics=False, bpf_filte
                 processed_count += 1
                 
             except Exception as e:
+                malformed_count += 1
                 if debug:
                     print(f"[DEBUG] Exception encountered in packet {packet_count}: {e}")
                 continue
@@ -766,12 +856,22 @@ def extract_device_info(pcap_file, debug=False, collect_metrics=False, bpf_filte
     _enrich_conversations(conversation_data)
 
     print(f"[+] Processed {processed_count} of {packet_count} packets")
+    if malformed_count or skipped_missing_fields or skipped_invalid_mac:
+        print(
+            "[+] Skipped "
+            f"{malformed_count} malformed, {skipped_missing_fields} missing-field, "
+            f"{skipped_invalid_mac} invalid-MAC packets"
+        )
     print(f"[+] Found {len(conversation_data)} unique conversations")
 
     if collect_metrics:
         metrics = {
             "packet_count": packet_count,
             "processed_count": processed_count,
+            "malformed_count": malformed_count,
+            "skipped_unsupported_transport": skipped_unsupported_transport,
+            "skipped_missing_fields": skipped_missing_fields,
+            "skipped_invalid_mac": skipped_invalid_mac,
             "device_count": len(device_info),
             "conversation_count": len(conversation_data),
         }

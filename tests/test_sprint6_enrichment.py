@@ -15,8 +15,10 @@ from pcap_parser import (
     ConversationSummary,
     DeviceSummary,
     _classify_traffic_pattern,
+    _detect_application_protocol,
     _group_conversations,
     _map_vlan_devices,
+    _safe_int,
     enrich_outputs,
     infer_service_name,
     interpret_diffserv_field,
@@ -58,6 +60,34 @@ def _make_conv(**overrides) -> ConversationSummary:
     for key, val in defaults.items():
         setattr(conv, key, val)
     return conv
+
+
+class _FakePacket:
+    def __init__(self, **layers):
+        self.__dict__.update(layers)
+
+
+# ---------------------------------------------------------------------------
+# Core parser hardening helpers
+# ---------------------------------------------------------------------------
+
+class TestCoreParserHardening:
+    def test_safe_int_rejects_malformed_fields(self):
+        assert _safe_int('443') == 443
+        assert _safe_int('not-a-port') is None
+        assert _safe_int('', default=0) == 0
+
+    def test_detect_application_protocol_prefers_dissector_layer(self):
+        pkt = _FakePacket(highest_layer='DATA', dns=object())
+        assert _detect_application_protocol(pkt, src_udp_port=53000, dst_udp_port=53, highest_layer='DATA') == 'DNS'
+
+    def test_detect_application_protocol_uses_port_fallback_for_truncated_tls(self):
+        pkt = _FakePacket(highest_layer='DATA')
+        assert _detect_application_protocol(pkt, src_tcp_port=53111, dst_tcp_port=443, highest_layer='DATA') == 'TLS'
+
+    def test_detect_application_protocol_identifies_http_without_layer(self):
+        pkt = _FakePacket(highest_layer='TCP')
+        assert _detect_application_protocol(pkt, src_tcp_port=50123, dst_tcp_port=8080, highest_layer='TCP') == 'HTTP'
 
 
 # ---------------------------------------------------------------------------
