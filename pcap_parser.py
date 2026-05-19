@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 try:
     from tqdm import tqdm
@@ -178,6 +178,32 @@ class ConversationSummary:
 
     def get(self, key: str, default: Any = None) -> Any:
         return getattr(self, key, default)
+
+
+@dataclass(frozen=True, slots=True)
+class StreamingProgress:
+    """Progress snapshot emitted during memory-bounded capture parsing."""
+
+    pcap_file: str
+    packets_seen: int
+    packets_processed: int
+    malformed_packets: int
+    skipped_packets: int
+    device_count: int
+    conversation_count: int
+    event: str = "packet"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "pcap_file": self.pcap_file,
+            "packets_seen": self.packets_seen,
+            "packets_processed": self.packets_processed,
+            "malformed_packets": self.malformed_packets,
+            "skipped_packets": self.skipped_packets,
+            "device_count": self.device_count,
+            "conversation_count": self.conversation_count,
+            "event": self.event,
+        }
 
 
 SERVICE_PORT_MAP: dict[int, tuple[str, float]] = {
@@ -533,7 +559,14 @@ def check_tshark_installation():
         print("    pip install pyshark")
         return False
 
-def extract_device_info(pcap_file, debug=False, collect_metrics=False, bpf_filter=None):
+def extract_device_info(
+    pcap_file,
+    debug=False,
+    collect_metrics=False,
+    bpf_filter=None,
+    progress_callback: Callable[[StreamingProgress], None] | None = None,
+    progress_interval: int = 100,
+):
     """
     Extracts device information from all packets in the provided pcap file.
     Now extracting detailed conversation data between pairs of IP addresses.
@@ -543,6 +576,8 @@ def extract_device_info(pcap_file, debug=False, collect_metrics=False, bpf_filte
         debug: Enable debug-level logging per packet.
         collect_metrics: Return a third metrics dict alongside (device_info, conversation_data).
         bpf_filter: Optional BPF-style display filter passed to PyShark (e.g. "ip", "tcp.port==443").
+        progress_callback: Optional callback receiving StreamingProgress snapshots.
+        progress_interval: Emit progress every N packets processed (default: 100).
     """
     print(f"\n[+] Loading capture file: {pcap_file}")
     if bpf_filter:
@@ -573,6 +608,23 @@ def extract_device_info(pcap_file, debug=False, collect_metrics=False, bpf_filte
     skipped_unsupported_transport = 0
     skipped_missing_fields = 0
     skipped_invalid_mac = 0
+    progress_interval = max(1, int(progress_interval or 1))
+
+    def emit_progress(event: str = "packet") -> None:
+        if not progress_callback:
+            return
+        progress_callback(
+            StreamingProgress(
+                pcap_file=str(pcap_file),
+                packets_seen=packet_count,
+                packets_processed=processed_count,
+                malformed_packets=malformed_count,
+                skipped_packets=skipped_unsupported_transport + skipped_missing_fields + skipped_invalid_mac,
+                device_count=len(device_info),
+                conversation_count=len(conversation_data),
+                event=event,
+            )
+        )
     
     # Try to get total packet estimate for progress bar
     total_estimate = None
@@ -589,6 +641,8 @@ def extract_device_info(pcap_file, debug=False, collect_metrics=False, bpf_filte
             packet_count += 1
             if packet_count % 100 == 0:
                 progress.update(100)
+                if packet_count % progress_interval == 0:
+                    emit_progress()
             try:
                 transport_protocol = pkt.transport_layer if hasattr(pkt, 'transport_layer') else None
                 if transport_protocol not in {"TCP", "UDP"}:
@@ -831,6 +885,8 @@ def extract_device_info(pcap_file, debug=False, collect_metrics=False, bpf_filte
                     ip_record.udp_ports.add(dst_udp_port)
                 
                 processed_count += 1
+                if processed_count % progress_interval == 0:
+                    emit_progress()
                 
             except Exception as e:
                 malformed_count += 1
@@ -847,6 +903,7 @@ def extract_device_info(pcap_file, debug=False, collect_metrics=False, bpf_filte
         capture.close()
     
     _populate_device_vendors(device_info)
+    emit_progress("complete")
 
     # Calculate durations for all conversations
     for conv in conversation_data.values():
@@ -2211,6 +2268,8 @@ def parse_capture(
     *,
     debug: bool = False,
     bpf_filter: str | None = None,
+    progress_callback: Callable[[StreamingProgress], None] | None = None,
+    progress_interval: int = 100,
 ) -> ParsedData:
     """Parse a PCAP/PCAPNG file and return structured data.
 
@@ -2234,7 +2293,13 @@ def parse_capture(
         raise FileNotFoundError(f"PCAP file not found: {pcap_path}")
 
     start = time.time()
-    result = extract_device_info(str(pcap_path), debug=debug, bpf_filter=bpf_filter)
+    result = extract_device_info(
+        str(pcap_path),
+        debug=debug,
+        bpf_filter=bpf_filter,
+        progress_callback=progress_callback,
+        progress_interval=progress_interval,
+    )
     elapsed = time.time() - start
 
     if not result:
@@ -2266,6 +2331,7 @@ def parse_capture_streaming(
     debug: bool = False,
     bpf_filter: str | None = None,
     chunk_size: int = 100,
+    include_progress: bool = False,
 ) -> Iterable[dict]:
     """Parse a PCAP/PCAPNG file and yield JSON-serializable records as they're processed.
 
@@ -2283,7 +2349,18 @@ def parse_capture_streaming(
     Yields:
         dict records with ``type`` in {"device", "conversation", "summary"}.
     """
-    data = parse_capture(pcap_path, debug=debug, bpf_filter=bpf_filter)
+    progress_events: list[StreamingProgress] = []
+    data = parse_capture(
+        pcap_path,
+        debug=debug,
+        bpf_filter=bpf_filter,
+        progress_callback=progress_events.append if include_progress else None,
+        progress_interval=chunk_size,
+    )
+
+    if include_progress:
+        for event in progress_events:
+            yield {"type": "progress", **event.to_dict()}
 
     for device in data.devices:
         yield {"type": "device", **device.to_dict()}
