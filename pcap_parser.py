@@ -210,6 +210,8 @@ SERVICE_PORT_MAP: dict[int, tuple[str, float]] = {
     22: ("SSH", 0.98),
     25: ("SMTP", 0.95),
     53: ("DNS", 0.98),
+    67: ("DHCP", 0.98),
+    68: ("DHCP", 0.98),
     80: ("HTTP", 0.95),
     110: ("POP3", 0.95),
     123: ("NTP", 0.96),
@@ -232,6 +234,9 @@ SERVICE_PORT_MAP: dict[int, tuple[str, float]] = {
 }
 
 APP_PROTOCOL_SERVICE_MAP: dict[str, str] = {
+    "ARP": "ARP",
+    "BOOTP": "DHCP",
+    "DHCP": "DHCP",
     "DNS": "DNS",
     "FTP": "FTP",
     "HTTP": "HTTP",
@@ -254,6 +259,14 @@ APP_PROTOCOL_SERVICE_MAP: dict[str, str] = {
     "SSH": "SSH",
     "TLS": "HTTPS",
     "SSL": "HTTPS",
+}
+
+INFRASTRUCTURE_LAYER_LABELS: dict[str, str] = {
+    "arp": "ARP",
+    "icmpv6": "ICMPv6",
+    "icmpv6opt": "ICMPv6",
+    "dhcp": "DHCP",
+    "bootp": "DHCP",
 }
 
 DIFFSERV_DSCP_NAME_MAP: dict[int, str] = {
@@ -332,6 +345,10 @@ def _detect_application_protocol(
     DNS, and TLS conversations stay consistently labelled in edge-case pcaps.
     """
 
+    for layer_name, label in INFRASTRUCTURE_LAYER_LABELS.items():
+        if _has_packet_layer(packet, layer_name):
+            return label
+
     layer_preferences = [
         ("http2", "HTTP2"),
         ("http", "HTTP"),
@@ -350,6 +367,8 @@ def _detect_application_protocol(
 
     tcp_ports = {port for port in (src_tcp_port, dst_tcp_port) if port is not None}
     udp_ports = {port for port in (src_udp_port, dst_udp_port) if port is not None}
+    if udp_ports & {67, 68}:
+        return "DHCP"
     if 53 in udp_ports or 53 in tcp_ports:
         return "DNS"
     if tcp_ports & {80, 8080}:
@@ -357,6 +376,65 @@ def _detect_application_protocol(
     if tcp_ports & {443, 8443} or udp_ports & {443, 8443}:
         return "TLS"
     return normalized_highest
+
+
+def _safe_layer_attr(layer: Any, *names: str) -> str | None:
+    """Read the first present pyshark layer attribute without propagating decoder errors."""
+
+    for name in names:
+        try:
+            value = getattr(layer, name)
+        except Exception:
+            continue
+        if value not in (None, ""):
+            return str(value)
+    return None
+
+
+def extract_tls_client_metadata(packet: Any) -> dict[str, str]:
+    """Extract TLS SNI/ALPN metadata from pyshark packets when fields are available."""
+
+    tls_layer = None
+    for layer_name in ("tls", "ssl"):
+        if _has_packet_layer(packet, layer_name):
+            try:
+                tls_layer = getattr(packet, layer_name)
+                break
+            except Exception:
+                continue
+    if tls_layer is None:
+        return {}
+
+    metadata: dict[str, str] = {}
+    sni = _safe_layer_attr(
+        tls_layer,
+        "handshake_extensions_server_name",
+        "handshake_extensions_server_name_list_server_name",
+        "server_name",
+    )
+    alpn = _safe_layer_attr(
+        tls_layer,
+        "handshake_extensions_alpn_str",
+        "handshake_extensions_alpn_protocol",
+        "app_proto",
+    )
+    if sni:
+        metadata["sni"] = sni
+    if alpn:
+        metadata["alpn"] = alpn
+    return metadata
+
+
+def dns_name_is_safely_decoded(name: str | None) -> bool:
+    """Return false for malformed DNS names that indicate compression loops/errors."""
+
+    if not name:
+        return False
+    lowered = name.lower()
+    malformed_markers = ("compression loop", "bad compression", "malformed", "<root>")
+    if any(marker in lowered for marker in malformed_markers):
+        return False
+    return len(name) <= 253
 
 
 def interpret_diffserv_field(dsfield: str | int | None) -> str | None:
